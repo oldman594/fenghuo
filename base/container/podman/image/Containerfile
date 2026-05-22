@@ -1,0 +1,30 @@
+FROM docker.io/library/ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        cmake \
+        curl \
+        g++ \
+        gcc \
+        git \
+        just \
+        libboost-system-dev \
+        libboost-thread-dev \
+        make \
+        ninja-build \
+        nlohmann-json3-dev \
+        pkg-config \
+        sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY base/container/podman/runtime/container_bootstrap.sh /usr/local/bin/fenghuo-container-bootstrap
+RUN chmod +x /usr/local/bin/fenghuo-container-bootstrap
+
+WORKDIR /work/fenghuo
+
+ENTRYPOINT ["/usr/local/bin/fenghuo-container-bootstrap"]
+CMD ["/bin/bash"]

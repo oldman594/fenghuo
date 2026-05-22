@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fenghuo Console</title>
+    <link rel="stylesheet" href="/console/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Fenghuo Console</h1>
+        <p id="connectionStatus">Connecting</p>
+      </div>
+      <button id="refreshRooms" type="button">Refresh</button>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="panelHeader">
+          <h2>Create Room</h2>
+        </div>
+        <form id="createRoomForm" class="stack">
+          <label>
+            Room ID
+            <input id="roomId" name="room_id" value="console-room-001" autocomplete="off">
+          </label>
+          <label>
+            Room Name
+            <input id="roomName" name="name" value="Console room" autocomplete="off">
+          </label>
+          <label>
+            Mode
+            <input id="roomMode" name="mode" value="team_deathmatch" autocomplete="off">
+          </label>
+          <div class="split">
+            <label>
+              Max Players
+              <input id="maxPlayers" name="max_players" type="number" min="1" value="2">
+            </label>
+            <label>
+              Team Size
+              <input id="teamSize" name="team_size" type="number" min="1" value="1">
+            </label>
+          </div>
+          <button type="submit">Create</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panelHeader">
+          <h2>Rooms</h2>
+        </div>
+        <div id="roomList" class="roomList"></div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Selected Room</h2>
+          <span id="selectedRoomLabel" class="muted">None</span>
+        </div>
+        <div id="roomDetail" class="roomDetail empty">Select or create a room.</div>
+        <div class="actions">
+          <button id="joinRed" type="button">Join Red</button>
+          <button id="joinBlue" type="button">Join Blue</button>
+          <button id="readyAll" type="button">Ready All</button>
+          <button id="startRoom" type="button">Start</button>
+          <button id="closeRoom" class="secondaryDanger" type="button">Close Room</button>
+        </div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Battle</h2>
+          <span id="battleLabel" class="muted">None</span>
+        </div>
+        <div id="battleDetail" class="roomDetail empty">Start a room to create a battle.</div>
+        <div class="attackGrid">
+          <label>
+            Attacker
+            <select id="attackerSelect"></select>
+          </label>
+          <label>
+            Target
+            <select id="targetSelect"></select>
+          </label>
+          <label>
+            Damage
+            <input id="damageInput" type="number" min="1" value="10">
+          </label>
+        </div>
+        <div class="actions">
+          <button id="attackButton" type="button">Attack</button>
+          <button id="pauseBattle" type="button">Pause</button>
+          <button id="resumeBattle" type="button">Resume</button>
+          <button id="endBattle" type="button">End Battle</button>
+          <a class="buttonLink" href="/sim">Open Simulator</a>
+        </div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Events</h2>
+          <button id="clearLog" type="button">Clear</button>
+        </div>
+        <pre id="eventLog" class="eventLog"></pre>
+      </section>
+    </main>
+
+    <script src="/console/app.js"></script>
+  </body>
+</html>

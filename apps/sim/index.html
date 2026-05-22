@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fenghuo Simulator</title>
+    <link rel="stylesheet" href="/sim/styles.css">
+  </head>
+  <body>
+    <header class="bar">
+      <div>
+        <h1>Fenghuo Simulator</h1>
+        <p id="status">Idle</p>
+      </div>
+      <a href="/console">Console</a>
+    </header>
+    <main class="shell">
+      <section class="controls">
+        <label>
+          Room ID
+          <input id="roomId" value="sim-room-001">
+        </label>
+        <label>
+          Duration seconds
+          <input id="durationSeconds" type="number" min="10" value="60">
+        </label>
+        <label>
+          Damage
+          <input id="damage" type="number" min="1" value="10">
+        </label>
+        <div class="buttons">
+          <button id="setup">Setup 2v2</button>
+          <button id="run">Run</button>
+          <button id="pause">Pause</button>
+          <button id="end">End</button>
+        </div>
+        <pre id="log"></pre>
+      </section>
+      <section class="arenaPanel">
+        <canvas id="arena" width="960" height="560"></canvas>
+      </section>
+    </main>
+    <script src="/sim/app.js"></script>
+  </body>
+</html>
