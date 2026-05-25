@@ -1,5 +1,6 @@
 #include "protocol/event.hpp"
 
+#include <cmath>
 #include <limits>
 
 namespace fenghuo::protocol {
@@ -40,6 +41,21 @@ Result<int> required_int(const nlohmann::json& object, const char* key) {
         return Result<int>::err(invalid(std::string(key) + " must be an integer"));
     }
     return Result<int>::ok(object.at(key).get<int>());
+}
+
+Result<int> required_rounded_int(const nlohmann::json& object, const char* key) {
+    if (!object.contains(key)) {
+        return Result<int>::err(missing(key));
+    }
+    if (!object.at(key).is_number()) {
+        return Result<int>::err(invalid(std::string(key) + " must be a number"));
+    }
+    const auto rounded = std::round(object.at(key).get<double>());
+    if (rounded < static_cast<double>(std::numeric_limits<int>::min()) ||
+        rounded > static_cast<double>(std::numeric_limits<int>::max())) {
+        return Result<int>::err(invalid(std::string(key) + " is out of range"));
+    }
+    return Result<int>::ok(static_cast<int>(rounded));
 }
 
 Result<std::int64_t> required_i64(const nlohmann::json& object, const char* key) {
@@ -175,7 +191,7 @@ Result<core::BattleEvent> hit(const EventEnvelope& envelope) {
     if (!assign_or_error(weapon_id, event.weapon_id)) {
         return Result<core::BattleEvent>::err(weapon_id.error());
     }
-    auto damage = required_int(envelope.payload, "damage");
+    auto damage = required_rounded_int(envelope.payload, "damage");
     if (!assign_or_error(damage, event.damage)) {
         return Result<core::BattleEvent>::err(damage.error());
     }

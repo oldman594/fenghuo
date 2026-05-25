@@ -74,11 +74,12 @@ int main(int argc, char** argv) {
         auto room_composite_sink =
             std::make_shared<fenghuo::room_runtime::CompositeRoomUpdateSink>();
         auto websocket_broadcaster = std::make_shared<fenghuo::server::WebSocketBroadcaster>();
-        composite_sink->add(websocket_broadcaster);
-        room_composite_sink->add(websocket_broadcaster);
 
         fenghuo::ap_runtime::ApRuntime runtime(store, composite_sink);
         fenghuo::room_runtime::RoomRuntime room_runtime(room_store, room_composite_sink);
+        websocket_broadcaster->bind_runtimes(&runtime, &room_runtime);
+        composite_sink->add(websocket_broadcaster);
+        room_composite_sink->add(websocket_broadcaster);
         auto replay_records = store->read_all();
         if (!replay_records) {
             std::cerr << "failed to read event log for replay: " << replay_records.error().message

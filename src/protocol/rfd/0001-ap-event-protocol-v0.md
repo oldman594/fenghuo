@@ -88,6 +88,8 @@ Records that a player fired.
 ### `hit`
 
 Records that a target was hit. In V0 this may be simulator generated.
+`damage` is accepted as a JSON number. The AP rounds fractional values to the nearest integer before
+applying health changes.
 
 ```json
 {

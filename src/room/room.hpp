@@ -33,6 +33,28 @@ struct RoomPlayerState {
     std::int64_t joined_at_ms{0};
 };
 
+struct RoomDeviceState {
+    std::string device_id;
+    std::string device_kind;
+    std::string display_name;
+    bool online{true};
+    std::optional<int> battery_percent;
+    std::optional<int> signal_strength;
+    std::optional<std::string> bound_player_id;
+    std::int64_t last_seen_at_ms{0};
+    std::int64_t registered_at_ms{0};
+};
+
+struct RoomPlayerPositionState {
+    std::string player_id;
+    std::string source_device_id;
+    double x{0.0};
+    double y{0.0};
+    double heading_deg{0.0};
+    double velocity_mps{0.0};
+    std::int64_t updated_at_ms{0};
+};
+
 struct RoomState {
     std::string room_id;
     std::string room_code;
@@ -45,6 +67,8 @@ struct RoomState {
     std::uint32_t max_players{0};
     std::map<std::string, RoomTeamState> teams;
     std::map<std::string, RoomPlayerState> players;
+    std::map<std::string, RoomDeviceState> devices;
+    std::map<std::string, RoomPlayerPositionState> positions;
     std::optional<std::string> battle_id;
     std::optional<std::string> latest_room_event_id;
 };
@@ -102,6 +126,54 @@ struct RoomPlayerReadyChanged {
     bool ready{false};
 };
 
+struct RoomDeviceRegistered {
+    std::string room_id;
+    std::string event_id;
+    std::int64_t occurred_at_ms{0};
+    std::string device_id;
+    std::string device_kind;
+    std::string display_name;
+    std::optional<int> battery_percent;
+    std::optional<int> signal_strength;
+};
+
+struct RoomDeviceHeartbeatUpdated {
+    std::string room_id;
+    std::string event_id;
+    std::int64_t occurred_at_ms{0};
+    std::string device_id;
+    std::optional<int> battery_percent;
+    std::optional<int> signal_strength;
+    bool online{true};
+};
+
+struct RoomDeviceBound {
+    std::string room_id;
+    std::string event_id;
+    std::int64_t occurred_at_ms{0};
+    std::string device_id;
+    std::string player_id;
+};
+
+struct RoomDeviceUnbound {
+    std::string room_id;
+    std::string event_id;
+    std::int64_t occurred_at_ms{0};
+    std::string device_id;
+};
+
+struct RoomPlayerPositionUpdated {
+    std::string room_id;
+    std::string event_id;
+    std::int64_t occurred_at_ms{0};
+    std::string player_id;
+    std::string source_device_id;
+    double x{0.0};
+    double y{0.0};
+    double heading_deg{0.0};
+    double velocity_mps{0.0};
+};
+
 struct RoomStarted {
     std::string room_id;
     std::string event_id;
@@ -127,6 +199,11 @@ using RoomEvent = std::variant<RoomCreated,
                                RoomPlayerLeft,
                                RoomPlayerTeamChanged,
                                RoomPlayerReadyChanged,
+                               RoomDeviceRegistered,
+                               RoomDeviceHeartbeatUpdated,
+                               RoomDeviceBound,
+                               RoomDeviceUnbound,
+                               RoomPlayerPositionUpdated,
                                RoomStarted,
                                RoomEnded,
                                RoomClosed>;

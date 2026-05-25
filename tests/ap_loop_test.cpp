@@ -176,6 +176,47 @@ void test_battle_pause_blocks_gameplay_until_resume() {
            "hit after resume should be accepted");
 }
 
+void test_hit_damage_rounds_fractional_number() {
+    auto store = std::make_shared<FakeBattleEventStore>();
+    auto sink = std::make_shared<CollectingBattleUpdateSink>();
+    fenghuo::ap_runtime::ApRuntime runtime(store, sink);
+
+    auto sequence = normal_sequence();
+    for (std::size_t index = 0; index < 3; ++index) {
+        auto result = runtime.submit_event(sequence.at(index));
+        expect(result.status == fenghuo::ap_runtime::SubmitEventResult::Status::Accepted,
+               "setup event should be accepted");
+    }
+
+    auto rounded_down = runtime.submit_event(parse(event_json(
+        "evt-hit-round-down", "hit", 20,
+        {{"attacker_player_id", "p-red-01"},
+         {"target_player_id", "p-blue-01"},
+         {"weapon_id", "rifle-01"},
+         {"damage", 10.4},
+         {"hit_zone", "torso"}})));
+    expect(rounded_down.status == fenghuo::ap_runtime::SubmitEventResult::Status::Accepted,
+           "fractional damage below .5 should be accepted");
+    expect(rounded_down.snapshot.players.at("p-blue-01").health == 90,
+           "10.4 damage should round to 10");
+
+    auto rounded_up = runtime.submit_event(parse(event_json(
+        "evt-hit-round-up", "hit", 21,
+        {{"attacker_player_id", "p-red-01"},
+         {"target_player_id", "p-blue-01"},
+         {"weapon_id", "rifle-01"},
+         {"damage", 10.5},
+         {"hit_zone", "torso"}})));
+    expect(rounded_up.status == fenghuo::ap_runtime::SubmitEventResult::Status::Accepted,
+           "fractional damage at .5 should be accepted");
+    expect(rounded_up.snapshot.players.at("p-blue-01").health == 79,
+           "10.5 damage should round to 11");
+    expect(rounded_up.snapshot.players.at("p-red-01").hit_count == 2,
+           "rounded damage hits should still count as hits");
+    expect(rounded_up.snapshot.teams.at("red").score == 2,
+           "rounded damage hits should still score");
+}
+
 void test_storage_failure_blocks_broadcast_and_commit() {
     auto store = std::make_shared<FailingBattleEventStore>();
     auto sink = std::make_shared<CollectingBattleUpdateSink>();
@@ -270,11 +311,12 @@ void test_server_stop_unblocks_run() {
     auto composite_sink = std::make_shared<fenghuo::ap_runtime::CompositeBattleUpdateSink>();
     auto room_composite_sink = std::make_shared<fenghuo::room_runtime::CompositeRoomUpdateSink>();
     auto broadcaster = std::make_shared<fenghuo::server::WebSocketBroadcaster>();
-    composite_sink->add(broadcaster);
-    room_composite_sink->add(broadcaster);
     fenghuo::ap_runtime::ApRuntime runtime(store, composite_sink);
     fenghuo::room_runtime::RoomRuntime room_runtime(
         std::make_shared<FakeRoomEventStore>(), room_composite_sink);
+    broadcaster->bind_runtimes(&runtime, &room_runtime);
+    composite_sink->add(broadcaster);
+    room_composite_sink->add(broadcaster);
     boost::asio::io_context io;
     fenghuo::server::ApServer server(io, runtime, room_runtime, broadcaster, 18081);
 
@@ -293,6 +335,7 @@ int main() {
     test_protocol_rejects_invalid_payload();
     test_runtime_sequence_and_duplicates();
     test_battle_pause_blocks_gameplay_until_resume();
+    test_hit_damage_rounds_fractional_number();
     test_storage_failure_blocks_broadcast_and_commit();
     test_jsonl_store_appends_records();
     test_jsonl_replay_restores_runtime_state_and_dedupe();

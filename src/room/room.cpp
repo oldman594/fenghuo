@@ -1,6 +1,7 @@
 #include "room/room.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <type_traits>
 
 namespace fenghuo::room {
@@ -51,6 +52,44 @@ bool has_module_id(const RoomState& state, const std::string& module_id) {
     return std::any_of(state.players.begin(), state.players.end(), [&module_id](const auto& entry) {
         return entry.second.module_id == module_id;
     });
+}
+
+bool has_bound_device_for_player(const RoomState& state, const std::string& player_id) {
+    return std::any_of(state.devices.begin(), state.devices.end(), [&player_id](const auto& entry) {
+        return entry.second.bound_player_id && *entry.second.bound_player_id == player_id;
+    });
+}
+
+Result<void> validate_signal_metric(const std::optional<int>& value, std::string field) {
+    if (!value) {
+        return Result<void>::ok();
+    }
+    if (*value < 0 || *value > 100) {
+        return Result<void>::err(invalid(std::move(field) + " must be between 0 and 100"));
+    }
+    return Result<void>::ok();
+}
+
+Result<void> require_position_phase(const RoomState& state) {
+    if (state.phase != RoomPhase::Open && state.phase != RoomPhase::Active) {
+        return Result<void>::err(conflict("room_player_position_updated is only accepted while room is open or active"));
+    }
+    return Result<void>::ok();
+}
+
+double normalize_heading(double heading_deg) {
+    auto normalized = std::fmod(heading_deg, 360.0);
+    if (normalized < 0.0) {
+        normalized += 360.0;
+    }
+    return normalized;
+}
+
+Result<void> validate_finite(double value, std::string field) {
+    if (!std::isfinite(value)) {
+        return Result<void>::err(invalid(std::move(field) + " must be finite"));
+    }
+    return Result<void>::ok();
 }
 
 Result<void> check_team_capacity(const RoomState& state, const std::string& team_id) {
@@ -111,6 +150,8 @@ Result<void> apply_room_created(RoomState& state, const RoomCreated& event) {
     state.max_players = event.max_players;
     state.teams = std::move(teams);
     state.players.clear();
+    state.devices.clear();
+    state.positions.clear();
     state.battle_id.reset();
     mark_latest(state, event.event_id, event.occurred_at_ms);
     return Result<void>::ok();
@@ -208,6 +249,165 @@ Result<void> apply_player_ready_changed(RoomState& state, const RoomPlayerReadyC
     return Result<void>::ok();
 }
 
+Result<void> apply_device_registered(RoomState& state, const RoomDeviceRegistered& event) {
+    if (auto check = check_room(state, event.room_id); !check) {
+        return check;
+    }
+    if (auto open = require_open(state, "room_device_registered"); !open) {
+        return open;
+    }
+    if (event.device_id.empty()) {
+        return Result<void>::err(invalid("device_id is required"));
+    }
+    if (event.device_kind.empty()) {
+        return Result<void>::err(invalid("device_kind is required"));
+    }
+    if (state.devices.contains(event.device_id)) {
+        return Result<void>::err(conflict("device already registered"));
+    }
+    if (auto battery = validate_signal_metric(event.battery_percent, "battery_percent"); !battery) {
+        return battery;
+    }
+    if (auto signal = validate_signal_metric(event.signal_strength, "signal_strength"); !signal) {
+        return signal;
+    }
+
+    state.devices.emplace(event.device_id, RoomDeviceState{event.device_id,
+                                                           event.device_kind,
+                                                           event.display_name,
+                                                           true,
+                                                           event.battery_percent,
+                                                           event.signal_strength,
+                                                           std::nullopt,
+                                                           event.occurred_at_ms,
+                                                           event.occurred_at_ms});
+    mark_latest(state, event.event_id, event.occurred_at_ms);
+    return Result<void>::ok();
+}
+
+Result<void> apply_device_heartbeat_updated(RoomState& state, const RoomDeviceHeartbeatUpdated& event) {
+    if (auto check = check_room(state, event.room_id); !check) {
+        return check;
+    }
+    auto device = state.devices.find(event.device_id);
+    if (device == state.devices.end()) {
+        return Result<void>::err({ErrorCode::NotFound, "device is not registered in room"});
+    }
+    if (auto battery = validate_signal_metric(event.battery_percent, "battery_percent"); !battery) {
+        return battery;
+    }
+    if (auto signal = validate_signal_metric(event.signal_strength, "signal_strength"); !signal) {
+        return signal;
+    }
+
+    device->second.online = event.online;
+    if (event.battery_percent) {
+        device->second.battery_percent = event.battery_percent;
+    }
+    if (event.signal_strength) {
+        device->second.signal_strength = event.signal_strength;
+    }
+    device->second.last_seen_at_ms = event.occurred_at_ms;
+    mark_latest(state, event.event_id, event.occurred_at_ms);
+    return Result<void>::ok();
+}
+
+Result<void> apply_device_bound(RoomState& state, const RoomDeviceBound& event) {
+    if (auto check = check_room(state, event.room_id); !check) {
+        return check;
+    }
+    if (auto open = require_open(state, "room_device_bound"); !open) {
+        return open;
+    }
+    auto device = state.devices.find(event.device_id);
+    if (device == state.devices.end()) {
+        return Result<void>::err({ErrorCode::NotFound, "device is not registered in room"});
+    }
+    if (!state.players.contains(event.player_id)) {
+        return Result<void>::err({ErrorCode::NotFound, "player is not in room"});
+    }
+    if (device->second.bound_player_id && *device->second.bound_player_id == event.player_id) {
+        return Result<void>::err(conflict("device already bound to player"));
+    }
+    if (device->second.bound_player_id) {
+        return Result<void>::err(conflict("device already bound"));
+    }
+    if (has_bound_device_for_player(state, event.player_id)) {
+        return Result<void>::err(conflict("player already has a bound device"));
+    }
+
+    device->second.bound_player_id = event.player_id;
+    device->second.online = true;
+    device->second.last_seen_at_ms = event.occurred_at_ms;
+    mark_latest(state, event.event_id, event.occurred_at_ms);
+    return Result<void>::ok();
+}
+
+Result<void> apply_device_unbound(RoomState& state, const RoomDeviceUnbound& event) {
+    if (auto check = check_room(state, event.room_id); !check) {
+        return check;
+    }
+    if (auto open = require_open(state, "room_device_unbound"); !open) {
+        return open;
+    }
+    auto device = state.devices.find(event.device_id);
+    if (device == state.devices.end()) {
+        return Result<void>::err({ErrorCode::NotFound, "device is not registered in room"});
+    }
+    if (!device->second.bound_player_id) {
+        return Result<void>::err(conflict("device is not bound"));
+    }
+
+    device->second.bound_player_id.reset();
+    device->second.last_seen_at_ms = event.occurred_at_ms;
+    mark_latest(state, event.event_id, event.occurred_at_ms);
+    return Result<void>::ok();
+}
+
+Result<void> apply_player_position_updated(RoomState& state, const RoomPlayerPositionUpdated& event) {
+    if (auto check = check_room(state, event.room_id); !check) {
+        return check;
+    }
+    if (auto phase = require_position_phase(state); !phase) {
+        return phase;
+    }
+    if (!state.players.contains(event.player_id)) {
+        return Result<void>::err({ErrorCode::NotFound, "player is not in room"});
+    }
+    auto device = state.devices.find(event.source_device_id);
+    if (device == state.devices.end()) {
+        return Result<void>::err({ErrorCode::NotFound, "source device is not registered in room"});
+    }
+    if (!device->second.bound_player_id || *device->second.bound_player_id != event.player_id) {
+        return Result<void>::err(conflict("source device is not bound to player"));
+    }
+    if (auto x = validate_finite(event.x, "x"); !x) {
+        return x;
+    }
+    if (auto y = validate_finite(event.y, "y"); !y) {
+        return y;
+    }
+    if (auto heading = validate_finite(event.heading_deg, "heading_deg"); !heading) {
+        return heading;
+    }
+    if (auto velocity = validate_finite(event.velocity_mps, "velocity_mps"); !velocity) {
+        return velocity;
+    }
+    if (event.velocity_mps < 0.0) {
+        return Result<void>::err(invalid("velocity_mps must not be negative"));
+    }
+
+    state.positions[event.player_id] = RoomPlayerPositionState{event.player_id,
+                                                               event.source_device_id,
+                                                               event.x,
+                                                               event.y,
+                                                               normalize_heading(event.heading_deg),
+                                                               event.velocity_mps,
+                                                               event.occurred_at_ms};
+    mark_latest(state, event.event_id, event.occurred_at_ms);
+    return Result<void>::ok();
+}
+
 Result<void> apply_room_started(RoomState& state, const RoomStarted& event) {
     if (auto check = check_room(state, event.room_id); !check) {
         return check;
@@ -273,6 +473,16 @@ Result<void> apply_event_to_state(RoomState& state, const Event& event) {
         return apply_player_team_changed(state, event);
     } else if constexpr (std::is_same_v<Event, RoomPlayerReadyChanged>) {
         return apply_player_ready_changed(state, event);
+    } else if constexpr (std::is_same_v<Event, RoomDeviceRegistered>) {
+        return apply_device_registered(state, event);
+    } else if constexpr (std::is_same_v<Event, RoomDeviceHeartbeatUpdated>) {
+        return apply_device_heartbeat_updated(state, event);
+    } else if constexpr (std::is_same_v<Event, RoomDeviceBound>) {
+        return apply_device_bound(state, event);
+    } else if constexpr (std::is_same_v<Event, RoomDeviceUnbound>) {
+        return apply_device_unbound(state, event);
+    } else if constexpr (std::is_same_v<Event, RoomPlayerPositionUpdated>) {
+        return apply_player_position_updated(state, event);
     } else if constexpr (std::is_same_v<Event, RoomStarted>) {
         return apply_room_started(state, event);
     } else if constexpr (std::is_same_v<Event, RoomEnded>) {

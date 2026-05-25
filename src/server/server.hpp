@@ -23,16 +23,21 @@ public:
     using HttpRequest =
         boost::beast::http::request<boost::beast::http::string_body>;
 
+    void bind_runtimes(const ap_runtime::ApRuntime* runtime,
+                       const room_runtime::RoomRuntime* room_runtime);
     void add_session(TcpSocket socket, HttpRequest request);
     void stop();
     void publish_accepted_event(const protocol::EventEnvelope& envelope,
                                 const core::BattleSnapshot& snapshot) override;
     void publish_room_updated(const room::RoomEventEnvelope& envelope,
                               const room::RoomSnapshot& snapshot) override;
+    void publish_message(const nlohmann::json& message);
 
 private:
     class Session;
 
+    const ap_runtime::ApRuntime* runtime_{nullptr};
+    const room_runtime::RoomRuntime* room_runtime_{nullptr};
     std::mutex mutex_;
     std::vector<std::shared_ptr<Session>> sessions_;
 };
@@ -61,6 +66,7 @@ private:
                                         std::int64_t duration_ms);
     HttpResponse handle_request(const HttpRequest& request);
     HttpResponse handle_room_request(const HttpRequest& request, std::string target);
+    HttpResponse handle_app_query_request(const HttpRequest& request, std::string target);
     HttpResponse handle_console_request(const HttpRequest& request, std::string target);
     HttpResponse handle_sim_request(const HttpRequest& request, std::string target);
     HttpResponse json_response(boost::beast::http::status status, nlohmann::json body,

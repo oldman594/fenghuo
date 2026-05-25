@@ -179,6 +179,82 @@ void test_team_change_and_ready() {
     expect(state.players.at("p-red-01").ready, "player should become ready");
 }
 
+void test_device_register_bind_heartbeat_and_unbind() {
+    auto state = created_room();
+    apply_or_throw(state, join_red());
+
+    apply_or_throw(state, fenghuo::room::RoomDeviceRegistered{
+                              "room-001",
+                              "room-evt-device-001",
+                              1730000000003,
+                              "device-head-red-01",
+                              "headset_receiver",
+                              "Red Headset",
+                              92,
+                              85});
+    expect(state.devices.size() == 1, "device should register");
+    expect(state.devices.at("device-head-red-01").online, "registered device should start online");
+
+    apply_or_throw(state, fenghuo::room::RoomDeviceBound{
+                              "room-001", "room-evt-device-002", 1730000000004, "device-head-red-01", "p-red-01"});
+    expect(state.devices.at("device-head-red-01").bound_player_id == "p-red-01",
+           "device should bind to player");
+
+    apply_or_throw(state, fenghuo::room::RoomDeviceHeartbeatUpdated{
+                              "room-001", "room-evt-device-003", 1730000000005, "device-head-red-01", 88, 77, false});
+    expect(state.devices.at("device-head-red-01").battery_percent == 88,
+           "heartbeat should update battery");
+    expect(state.devices.at("device-head-red-01").signal_strength == 77,
+           "heartbeat should update signal strength");
+    expect(!state.devices.at("device-head-red-01").online, "heartbeat should update online state");
+
+    apply_or_throw(state, fenghuo::room::RoomDeviceUnbound{
+                              "room-001", "room-evt-device-004", 1730000000006, "device-head-red-01"});
+    expect(!state.devices.at("device-head-red-01").bound_player_id.has_value(),
+           "device should unbind from player");
+}
+
+void test_device_binding_rejects_duplicate_player_binding() {
+    auto state = created_room();
+    apply_or_throw(state, join_red());
+    apply_or_throw(state, fenghuo::room::RoomDeviceRegistered{
+                              "room-001", "room-evt-device-001", 1730000000003, "device-head-red-01",
+                              "headset_receiver", "Red Headset", std::nullopt, std::nullopt});
+    apply_or_throw(state, fenghuo::room::RoomDeviceRegistered{
+                              "room-001", "room-evt-device-002", 1730000000004, "device-gun-red-01",
+                              "infrared_gun", "Red Gun", std::nullopt, std::nullopt});
+    apply_or_throw(state, fenghuo::room::RoomDeviceBound{
+                              "room-001", "room-evt-device-003", 1730000000005, "device-head-red-01", "p-red-01"});
+
+    auto duplicate = fenghuo::room::apply_event(
+        state, fenghuo::room::RoomDeviceBound{
+                   "room-001", "room-evt-device-004", 1730000000006, "device-gun-red-01", "p-red-01"});
+    expect(!duplicate, "one player should not bind to multiple devices");
+    expect(duplicate.error().code == fenghuo::ErrorCode::Conflict,
+           "duplicate player binding should be conflict");
+}
+
+void test_position_update_requires_bound_device_and_normalizes_heading() {
+    auto state = created_room();
+    apply_or_throw(state, join_red());
+    apply_or_throw(state, fenghuo::room::RoomDeviceRegistered{
+                              "room-001", "room-evt-device-001", 1730000000003, "device-head-red-01",
+                              "headset_receiver", "Red Headset", std::nullopt, std::nullopt});
+
+    auto unbound = fenghuo::room::apply_event(
+        state, fenghuo::room::RoomPlayerPositionUpdated{
+                   "room-001", "room-evt-pos-001", 1730000000004, "p-red-01", "device-head-red-01", 12.5, 8.5, -90.0, 1.2});
+    expect(!unbound, "position update should require bound device");
+
+    apply_or_throw(state, fenghuo::room::RoomDeviceBound{
+                              "room-001", "room-evt-device-002", 1730000000005, "device-head-red-01", "p-red-01"});
+    apply_or_throw(state, fenghuo::room::RoomPlayerPositionUpdated{
+                              "room-001", "room-evt-pos-002", 1730000000006, "p-red-01", "device-head-red-01", 12.5, 8.5, -90.0, 1.2});
+    expect(state.positions.contains("p-red-01"), "position update should create latest position state");
+    expect(state.positions.at("p-red-01").heading_deg == 270.0,
+           "position update should normalize heading into [0, 360)");
+}
+
 void test_start_requires_ready_players() {
     auto state = created_room();
     apply_or_throw(state, join_red());
@@ -287,14 +363,51 @@ void test_room_protocol_rejects_unknown_event_type() {
            "unknown room event should report unknown event type");
 }
 
+void test_room_protocol_parses_device_event() {
+    auto parsed = fenghuo::room::parse_room_event_json(
+        room_event_json("room-evt-device-json-001", "room_device_registered", 4,
+                        {{"device_id", "device-head-red-01"},
+                         {"device_kind", "headset_receiver"},
+                         {"display_name", "Red Headset"},
+                         {"battery_percent", 90},
+                         {"signal_strength", 80}})
+            .dump());
+    expect(parsed.has_value(), "room device JSON should parse");
+
+    auto event = fenghuo::room::to_room_event(parsed.value());
+    expect(event.has_value(), "room device envelope should convert to domain event");
+}
+
+void test_room_protocol_parses_position_event() {
+    auto parsed = fenghuo::room::parse_room_event_json(
+        room_event_json("room-evt-pos-json-001", "room_player_position_updated", 5,
+                        {{"player_id", "p-red-01"},
+                         {"source_device_id", "device-head-red-01"},
+                         {"x", 12.5},
+                         {"y", 8.25},
+                         {"heading_deg", 180.0},
+                         {"velocity_mps", 1.5}})
+            .dump());
+    expect(parsed.has_value(), "room position JSON should parse");
+
+    auto event = fenghuo::room::to_room_event(parsed.value());
+    expect(event.has_value(), "room position envelope should convert to domain event");
+}
+
 void test_room_snapshot_json() {
     auto state = created_room();
     apply_or_throw(state, join_red());
+    apply_or_throw(state, fenghuo::room::RoomDeviceRegistered{
+                              "room-001", "room-evt-device-001", 1730000000003, "device-head-red-01",
+                              "headset_receiver", "Red Headset", 90, 80});
     auto json = fenghuo::room::to_json(state);
     expect(json.at("room_id") == "room-001", "room snapshot JSON should include room_id");
     expect(json.at("phase") == "open", "room snapshot JSON should include phase");
     expect(json.at("players").at("p-red-01").at("ready") == false,
            "room snapshot JSON should include player ready state");
+    expect(json.at("devices").at("device-head-red-01").at("device_kind") == "headset_receiver",
+           "room snapshot JSON should include device state");
+    expect(json.at("positions").empty(), "room snapshot JSON should include positions object");
 }
 
 void test_room_jsonl_store_appends_records() {
@@ -349,7 +462,21 @@ void test_room_jsonl_replay_restores_room_state() {
                                           {"module_id", "module-red-01"}})),
         parse_room_event(room_event_json("room-evt-replay-003", "room_player_ready_changed", 3,
                                          {{"player_id", "p-red-01"}, {"ready", true}})),
-        parse_room_event(room_event_json("room-evt-replay-004", "room_started", 4,
+        parse_room_event(room_event_json("room-evt-replay-004", "room_device_registered", 4,
+                                         {{"device_id", "device-head-red-01"},
+                                          {"device_kind", "headset_receiver"},
+                                          {"display_name", "Red Headset"}})),
+        parse_room_event(room_event_json("room-evt-replay-005", "room_device_bound", 5,
+                                         {{"device_id", "device-head-red-01"},
+                                          {"player_id", "p-red-01"}})),
+        parse_room_event(room_event_json("room-evt-replay-006", "room_player_position_updated", 6,
+                                         {{"player_id", "p-red-01"},
+                                          {"source_device_id", "device-head-red-01"},
+                                          {"x", 12.5},
+                                          {"y", 8.25},
+                                          {"heading_deg", 180.0},
+                                          {"velocity_mps", 1.5}})),
+        parse_room_event(room_event_json("room-evt-replay-007", "room_started", 7,
                                          {{"battle_id", "battle-room-001"},
                                           {"duration_ms", 600000}})),
     };
@@ -375,6 +502,8 @@ void test_room_jsonl_replay_restores_room_state() {
     }
     expect(state.phase == fenghuo::room::RoomPhase::Active, "room replay should restore active phase");
     expect(state.battle_id == "battle-room-001", "room replay should restore battle link");
+    expect(state.devices.contains("device-head-red-01"), "room replay should restore device state");
+    expect(state.positions.contains("p-red-01"), "room replay should restore position state");
 
     std::filesystem::remove_all(root);
 }
@@ -399,7 +528,21 @@ std::vector<fenghuo::room::RoomEventEnvelope> normal_room_sequence() {
                                           {"module_id", "module-red-01"}})),
         parse_room_event(room_event_json("room-evt-runtime-003", "room_player_ready_changed", 3,
                                          {{"player_id", "p-red-01"}, {"ready", true}})),
-        parse_room_event(room_event_json("room-evt-runtime-004", "room_started", 4,
+        parse_room_event(room_event_json("room-evt-runtime-004", "room_device_registered", 4,
+                                         {{"device_id", "device-head-red-01"},
+                                          {"device_kind", "headset_receiver"},
+                                          {"display_name", "Red Headset"}})),
+        parse_room_event(room_event_json("room-evt-runtime-005", "room_device_bound", 5,
+                                         {{"device_id", "device-head-red-01"},
+                                          {"player_id", "p-red-01"}})),
+        parse_room_event(room_event_json("room-evt-runtime-006", "room_player_position_updated", 6,
+                                         {{"player_id", "p-red-01"},
+                                          {"source_device_id", "device-head-red-01"},
+                                          {"x", 12.5},
+                                          {"y", 8.25},
+                                          {"heading_deg", 180.0},
+                                          {"velocity_mps", 1.5}})),
+        parse_room_event(room_event_json("room-evt-runtime-007", "room_started", 7,
                                          {{"battle_id", "battle-room-001"},
                                           {"duration_ms", 600000}})),
     };
@@ -417,14 +560,14 @@ void test_room_runtime_sequence_and_duplicates() {
                "normal room event should be accepted");
     }
     expect(last.snapshot.phase == fenghuo::room::RoomPhase::Active, "room should become active");
-    expect(store->appended.size() == 4, "accepted room events should be stored");
-    expect(sink->published.size() == 4, "accepted room events should be published");
+    expect(store->appended.size() == 7, "accepted room events should be stored");
+    expect(sink->published.size() == 7, "accepted room events should be published");
 
     auto duplicate = runtime.submit_event(normal_room_sequence().front());
     expect(duplicate.status == fenghuo::room_runtime::SubmitRoomEventResult::Status::Duplicate,
            "identical room duplicate should be reported as duplicate");
-    expect(store->appended.size() == 4, "room duplicate should not be stored again");
-    expect(sink->published.size() == 4, "room duplicate should not publish again");
+    expect(store->appended.size() == 7, "room duplicate should not be stored again");
+    expect(sink->published.size() == 7, "room duplicate should not publish again");
 }
 
 void test_room_runtime_storage_failure_blocks_broadcast_and_commit() {
@@ -459,7 +602,7 @@ void test_room_runtime_replay_restores_state_and_dedupe() {
     auto replay_store = std::make_shared<fenghuo::storage::JsonlRoomEventStore>(root);
     auto records = replay_store->read_all();
     expect(records.has_value(), "room runtime replay read_all should succeed");
-    expect(records.value().size() == 4, "room runtime replay should read all records");
+    expect(records.value().size() == 7, "room runtime replay should read all records");
 
     auto replay_sink = std::make_shared<CollectingRoomUpdateSink>();
     fenghuo::room_runtime::RoomRuntime replayed(replay_store, replay_sink);
@@ -488,12 +631,17 @@ int main() {
     test_join_rejects_duplicate_module();
     test_join_rejects_full_team_and_full_room();
     test_team_change_and_ready();
+    test_device_register_bind_heartbeat_and_unbind();
+    test_device_binding_rejects_duplicate_player_binding();
+    test_position_update_requires_bound_device_and_normalizes_heading();
     test_start_requires_ready_players();
     test_start_freezes_roster_and_end_close_lifecycle();
     test_close_open_room();
     test_room_protocol_parses_create_event();
     test_room_protocol_rejects_invalid_payload();
     test_room_protocol_rejects_unknown_event_type();
+    test_room_protocol_parses_device_event();
+    test_room_protocol_parses_position_event();
     test_room_snapshot_json();
     test_room_jsonl_store_appends_records();
     test_room_jsonl_replay_restores_room_state();

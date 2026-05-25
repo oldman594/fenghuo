@@ -93,6 +93,26 @@ Result<bool> required_bool(const nlohmann::json& object, const char* key) {
     return Result<bool>::ok(object.at(key).get<bool>());
 }
 
+Result<std::optional<int>> optional_int(const nlohmann::json& object, const char* key) {
+    if (!object.contains(key) || object.at(key).is_null()) {
+        return Result<std::optional<int>>::ok(std::nullopt);
+    }
+    if (!object.at(key).is_number_integer()) {
+        return Result<std::optional<int>>::err(invalid(std::string(key) + " must be an integer"));
+    }
+    return Result<std::optional<int>>::ok(object.at(key).get<int>());
+}
+
+Result<double> required_number(const nlohmann::json& object, const char* key) {
+    if (!object.contains(key)) {
+        return Result<double>::err(missing(key));
+    }
+    if (!object.at(key).is_number()) {
+        return Result<double>::err(invalid(std::string(key) + " must be a number"));
+    }
+    return Result<double>::ok(object.at(key).get<double>());
+}
+
 Result<void> require_object(const nlohmann::json& object, const char* name) {
     if (!object.is_object()) {
         return Result<void>::err(invalid(std::string(name) + " must be an object"));
@@ -242,6 +262,118 @@ Result<RoomEvent> room_player_ready_changed(const RoomEventEnvelope& envelope) {
     return Result<RoomEvent>::ok(event);
 }
 
+Result<RoomEvent> room_device_registered(const RoomEventEnvelope& envelope) {
+    RoomDeviceRegistered event;
+    event.room_id = envelope.room_id;
+    event.event_id = envelope.event_id;
+    event.occurred_at_ms = envelope.occurred_at_ms;
+    auto device_id = required_string(envelope.payload, "device_id");
+    if (!assign_or_error(device_id, event.device_id)) {
+        return Result<RoomEvent>::err(device_id.error());
+    }
+    auto device_kind = required_string(envelope.payload, "device_kind");
+    if (!assign_or_error(device_kind, event.device_kind)) {
+        return Result<RoomEvent>::err(device_kind.error());
+    }
+    auto display_name = optional_string(envelope.payload, "display_name");
+    if (!assign_or_error(display_name, event.display_name)) {
+        return Result<RoomEvent>::err(display_name.error());
+    }
+    auto battery_percent = optional_int(envelope.payload, "battery_percent");
+    if (!assign_or_error(battery_percent, event.battery_percent)) {
+        return Result<RoomEvent>::err(battery_percent.error());
+    }
+    auto signal_strength = optional_int(envelope.payload, "signal_strength");
+    if (!assign_or_error(signal_strength, event.signal_strength)) {
+        return Result<RoomEvent>::err(signal_strength.error());
+    }
+    return Result<RoomEvent>::ok(event);
+}
+
+Result<RoomEvent> room_device_heartbeat_updated(const RoomEventEnvelope& envelope) {
+    RoomDeviceHeartbeatUpdated event;
+    event.room_id = envelope.room_id;
+    event.event_id = envelope.event_id;
+    event.occurred_at_ms = envelope.occurred_at_ms;
+    auto device_id = required_string(envelope.payload, "device_id");
+    if (!assign_or_error(device_id, event.device_id)) {
+        return Result<RoomEvent>::err(device_id.error());
+    }
+    auto battery_percent = optional_int(envelope.payload, "battery_percent");
+    if (!assign_or_error(battery_percent, event.battery_percent)) {
+        return Result<RoomEvent>::err(battery_percent.error());
+    }
+    auto signal_strength = optional_int(envelope.payload, "signal_strength");
+    if (!assign_or_error(signal_strength, event.signal_strength)) {
+        return Result<RoomEvent>::err(signal_strength.error());
+    }
+    auto online = required_bool(envelope.payload, "online");
+    if (!assign_or_error(online, event.online)) {
+        return Result<RoomEvent>::err(online.error());
+    }
+    return Result<RoomEvent>::ok(event);
+}
+
+Result<RoomEvent> room_device_bound(const RoomEventEnvelope& envelope) {
+    RoomDeviceBound event;
+    event.room_id = envelope.room_id;
+    event.event_id = envelope.event_id;
+    event.occurred_at_ms = envelope.occurred_at_ms;
+    auto device_id = required_string(envelope.payload, "device_id");
+    if (!assign_or_error(device_id, event.device_id)) {
+        return Result<RoomEvent>::err(device_id.error());
+    }
+    auto player_id = required_string(envelope.payload, "player_id");
+    if (!assign_or_error(player_id, event.player_id)) {
+        return Result<RoomEvent>::err(player_id.error());
+    }
+    return Result<RoomEvent>::ok(event);
+}
+
+Result<RoomEvent> room_device_unbound(const RoomEventEnvelope& envelope) {
+    RoomDeviceUnbound event;
+    event.room_id = envelope.room_id;
+    event.event_id = envelope.event_id;
+    event.occurred_at_ms = envelope.occurred_at_ms;
+    auto device_id = required_string(envelope.payload, "device_id");
+    if (!assign_or_error(device_id, event.device_id)) {
+        return Result<RoomEvent>::err(device_id.error());
+    }
+    return Result<RoomEvent>::ok(event);
+}
+
+Result<RoomEvent> room_player_position_updated(const RoomEventEnvelope& envelope) {
+    RoomPlayerPositionUpdated event;
+    event.room_id = envelope.room_id;
+    event.event_id = envelope.event_id;
+    event.occurred_at_ms = envelope.occurred_at_ms;
+    auto player_id = required_string(envelope.payload, "player_id");
+    if (!assign_or_error(player_id, event.player_id)) {
+        return Result<RoomEvent>::err(player_id.error());
+    }
+    auto source_device_id = required_string(envelope.payload, "source_device_id");
+    if (!assign_or_error(source_device_id, event.source_device_id)) {
+        return Result<RoomEvent>::err(source_device_id.error());
+    }
+    auto x = required_number(envelope.payload, "x");
+    if (!assign_or_error(x, event.x)) {
+        return Result<RoomEvent>::err(x.error());
+    }
+    auto y = required_number(envelope.payload, "y");
+    if (!assign_or_error(y, event.y)) {
+        return Result<RoomEvent>::err(y.error());
+    }
+    auto heading_deg = required_number(envelope.payload, "heading_deg");
+    if (!assign_or_error(heading_deg, event.heading_deg)) {
+        return Result<RoomEvent>::err(heading_deg.error());
+    }
+    auto velocity_mps = required_number(envelope.payload, "velocity_mps");
+    if (!assign_or_error(velocity_mps, event.velocity_mps)) {
+        return Result<RoomEvent>::err(velocity_mps.error());
+    }
+    return Result<RoomEvent>::ok(event);
+}
+
 Result<RoomEvent> room_started(const RoomEventEnvelope& envelope) {
     RoomStarted event;
     event.room_id = envelope.room_id;
@@ -354,6 +486,21 @@ Result<RoomEvent> to_room_event(const RoomEventEnvelope& envelope) {
     if (envelope.event_type == "room_player_ready_changed") {
         return room_player_ready_changed(envelope);
     }
+    if (envelope.event_type == "room_device_registered") {
+        return room_device_registered(envelope);
+    }
+    if (envelope.event_type == "room_device_heartbeat_updated") {
+        return room_device_heartbeat_updated(envelope);
+    }
+    if (envelope.event_type == "room_device_bound") {
+        return room_device_bound(envelope);
+    }
+    if (envelope.event_type == "room_device_unbound") {
+        return room_device_unbound(envelope);
+    }
+    if (envelope.event_type == "room_player_position_updated") {
+        return room_player_position_updated(envelope);
+    }
     if (envelope.event_type == "room_started") {
         return room_started(envelope);
     }
@@ -402,6 +549,38 @@ nlohmann::json to_json(const RoomSnapshot& snapshot) {
         };
     }
 
+    nlohmann::json devices = nlohmann::json::object();
+    for (const auto& [device_id, device] : snapshot.devices) {
+        nlohmann::json json_device = {
+            {"device_id", device.device_id},
+            {"device_kind", device.device_kind},
+            {"display_name", device.display_name},
+            {"online", device.online},
+            {"last_seen_at_ms", device.last_seen_at_ms},
+            {"registered_at_ms", device.registered_at_ms},
+        };
+        json_device["battery_percent"] =
+            device.battery_percent ? nlohmann::json(*device.battery_percent) : nlohmann::json(nullptr);
+        json_device["signal_strength"] =
+            device.signal_strength ? nlohmann::json(*device.signal_strength) : nlohmann::json(nullptr);
+        json_device["bound_player_id"] =
+            device.bound_player_id ? nlohmann::json(*device.bound_player_id) : nlohmann::json(nullptr);
+        devices[device_id] = std::move(json_device);
+    }
+
+    nlohmann::json positions = nlohmann::json::object();
+    for (const auto& [player_id, position] : snapshot.positions) {
+        positions[player_id] = {
+            {"player_id", position.player_id},
+            {"source_device_id", position.source_device_id},
+            {"x", position.x},
+            {"y", position.y},
+            {"heading_deg", position.heading_deg},
+            {"velocity_mps", position.velocity_mps},
+            {"updated_at_ms", position.updated_at_ms},
+        };
+    }
+
     nlohmann::json output = {
         {"room_id", snapshot.room_id},
         {"room_code", snapshot.room_code},
@@ -414,6 +593,8 @@ nlohmann::json to_json(const RoomSnapshot& snapshot) {
         {"max_players", snapshot.max_players},
         {"teams", std::move(teams)},
         {"players", std::move(players)},
+        {"devices", std::move(devices)},
+        {"positions", std::move(positions)},
         {"latest_room_event_id", snapshot.latest_room_event_id.value_or("")},
     };
     if (snapshot.battle_id) {
