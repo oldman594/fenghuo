@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fenghuo App Debug</title>
+    <link rel="stylesheet" href="/app/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Fenghuo App Debug</h1>
+        <p id="connectionStatus">Connecting</p>
+      </div>
+      <button id="refreshRooms" type="button">Refresh</button>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="panelHeader">
+          <h2>Rooms</h2>
+        </div>
+        <div class="deviceTools">
+          <div class="split">
+            <label>
+              Room ID
+              <input id="createRoomIdInput" type="text" value="room-app-debug-001" autocomplete="off">
+            </label>
+            <label>
+              Name
+              <input id="createRoomNameInput" type="text" value="App Debug Room" autocomplete="off">
+            </label>
+          </div>
+          <div class="split">
+            <label>
+              Mode
+              <input id="createRoomModeInput" type="text" value="team_deathmatch" autocomplete="off">
+            </label>
+            <label>
+              Max Players
+              <input id="createRoomMaxPlayersInput" type="number" min="2" value="8">
+            </label>
+          </div>
+          <div class="actions">
+            <button id="createRoom" type="button">Create Room</button>
+          </div>
+        </div>
+        <div id="roomList" class="roomList"></div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Room</h2>
+          <span id="selectedRoomLabel" class="muted">None</span>
+        </div>
+        <div id="roomSummary" class="roomDetail empty">Select a room.</div>
+        <div class="actions">
+          <button id="joinRed" type="button">Join Red</button>
+          <button id="joinBlue" type="button">Join Blue</button>
+          <button id="readyAll" type="button">Ready All</button>
+          <button id="startRoom" type="button">Start</button>
+          <button id="closeRoom" class="secondaryDanger" type="button">Close</button>
+        </div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Players</h2>
+          <span id="playerCount" class="muted">0</span>
+        </div>
+        <div id="playerStatusList" class="statusList empty">No player status.</div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Devices</h2>
+          <span id="deviceCount" class="muted">0</span>
+        </div>
+        <div class="deviceTools">
+          <div class="split">
+            <label>
+              Device ID
+              <input id="deviceIdInput" type="text" value="device-head-red-01" autocomplete="off">
+            </label>
+            <label>
+              Device Kind
+              <input id="deviceKindInput" type="text" value="headset_receiver" autocomplete="off">
+            </label>
+          </div>
+          <div class="split">
+            <label>
+              Display Name
+              <input id="deviceNameInput" type="text" value="Red Headset" autocomplete="off">
+            </label>
+            <label>
+              Bind Player
+              <select id="bindPlayerSelect"></select>
+            </label>
+          </div>
+          <div class="split">
+            <label>
+              Battery
+              <input id="batteryInput" type="number" min="0" max="100" value="90">
+            </label>
+            <label>
+              Signal
+              <input id="signalInput" type="number" min="0" max="100" value="80">
+            </label>
+          </div>
+          <div class="split">
+            <label>
+              Heartbeat Online
+              <select id="heartbeatOnlineSelect">
+                <option value="true">online</option>
+                <option value="false">offline</option>
+              </select>
+            </label>
+            <div></div>
+          </div>
+          <div class="actions">
+            <button id="registerDevice" type="button">Register</button>
+            <button id="bindDevice" type="button">Bind</button>
+            <button id="heartbeatDevice" type="button">Heartbeat</button>
+            <button id="unbindDevice" type="button">Unbind</button>
+          </div>
+        </div>
+        <div id="deviceList" class="statusList empty">No devices.</div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Map</h2>
+          <span id="mapPhase" class="muted">None</span>
+        </div>
+        <div class="deviceTools">
+          <div class="split">
+            <label>
+              Player
+              <select id="positionPlayerSelect"></select>
+            </label>
+            <label>
+              Source Device
+              <select id="positionDeviceSelect"></select>
+            </label>
+          </div>
+          <div class="split quad">
+            <label>
+              X
+              <input id="positionXInput" type="number" step="0.1" value="0">
+            </label>
+            <label>
+              Y
+              <input id="positionYInput" type="number" step="0.1" value="0">
+            </label>
+            <label>
+              Heading
+              <input id="positionHeadingInput" type="number" step="1" value="0">
+            </label>
+            <label>
+              Velocity
+              <input id="positionVelocityInput" type="number" step="0.1" min="0" value="0">
+            </label>
+          </div>
+          <div class="actions">
+            <button id="submitPosition" type="button">Report Position</button>
+          </div>
+        </div>
+        <div id="mapSnapshot" class="roomDetail empty">No map snapshot.</div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Battle</h2>
+          <span id="battlePhase" class="muted">None</span>
+        </div>
+        <div id="battleSnapshot" class="roomDetail empty">No battle snapshot.</div>
+        <div class="deviceTools">
+          <div class="split">
+            <label>
+              Attacker
+              <select id="battleAttackerSelect"></select>
+            </label>
+            <label>
+              Weapon
+              <input id="battleWeaponInput" type="text" value="rifle-01" autocomplete="off">
+            </label>
+          </div>
+          <div class="split">
+            <label>
+              Target
+              <select id="battleTargetSelect"></select>
+            </label>
+            <label>
+              Hit Zone
+              <input id="battleHitZoneInput" type="text" value="torso" autocomplete="off">
+            </label>
+          </div>
+          <div class="split">
+            <label>
+              Ammo After
+              <input id="battleAmmoAfterInput" type="number" min="0" value="29">
+            </label>
+            <label>
+              Damage
+              <input id="battleDamageInput" type="number" min="1" step="0.1" value="10">
+            </label>
+          </div>
+          <div class="actions">
+            <button id="submitShot" type="button">Shot</button>
+            <button id="submitHit" type="button">Hit</button>
+          </div>
+          <div class="split">
+            <label>
+              Auto Mode
+              <select id="autoBattleModeSelect">
+                <option value="single_burst">single burst</option>
+                <option value="exchange">exchange</option>
+              </select>
+            </label>
+            <label>
+              Interval ms
+              <input id="autoBattleIntervalInput" type="number" min="100" step="100" value="600">
+            </label>
+          </div>
+          <div class="actions">
+            <button id="startAutoBattle" type="button">Start Auto</button>
+            <button id="stopAutoBattle" class="secondaryDanger" type="button">Stop Auto</button>
+            <span id="autoBattleStatus" class="inlineStatus">idle</span>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="pauseBattle" type="button">Pause</button>
+          <button id="resumeBattle" type="button">Resume</button>
+          <button id="endBattle" class="secondaryDanger" type="button">End</button>
+        </div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panelHeader">
+          <h2>Events</h2>
+          <button id="clearLog" type="button">Clear</button>
+        </div>
+        <pre id="eventLog" class="eventLog"></pre>
+      </section>
+    </main>
+
+    <script src="/app/app.js"></script>
+  </body>
+</html>

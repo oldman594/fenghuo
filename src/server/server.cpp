@@ -23,6 +23,9 @@ namespace {
 #ifndef FENGHUO_SIM_ROOT
 #define FENGHUO_SIM_ROOT "apps/sim"
 #endif
+#ifndef FENGHUO_APP_ROOT
+#define FENGHUO_APP_ROOT "apps/app"
+#endif
 
 std::string error_code_to_string(ErrorCode code) {
     switch (code) {
@@ -225,6 +228,14 @@ std::filesystem::path sim_asset_path(const std::string& asset) {
     return std::filesystem::path("apps/sim") / asset;
 }
 
+std::filesystem::path app_asset_path(const std::string& asset) {
+    const auto configured = std::filesystem::path(FENGHUO_APP_ROOT) / asset;
+    if (std::filesystem::exists(configured)) {
+        return configured;
+    }
+    return std::filesystem::path("apps/app") / asset;
+}
+
 const room::RoomDeviceState* find_bound_device(const room::RoomSnapshot& room_snapshot,
                                                const std::string& player_id) {
     for (const auto& [_, device] : room_snapshot.devices) {
@@ -278,9 +289,10 @@ nlohmann::json make_room_detail_json(const room::RoomSnapshot& snapshot) {
     };
 }
 
-std::optional<nlohmann::json> make_player_status_json(const room::RoomSnapshot& room_snapshot,
-                                                      const ap_runtime::ApRuntime* runtime,
-                                                      const std::string& player_id) {
+std::optional<nlohmann::json> make_player_status_json(
+    const room::RoomSnapshot& room_snapshot, const std::string& player_id,
+    const core::BattleSnapshot* battle_snapshot = nullptr,
+    const ap_runtime::ApRuntime* runtime = nullptr) {
     if (!contains_player(room_snapshot, player_id)) {
         return std::nullopt;
     }
@@ -303,10 +315,19 @@ std::optional<nlohmann::json> make_player_status_json(const room::RoomSnapshot& 
                                                                  : nlohmann::json(nullptr)},
     };
 
-    if (runtime && room_snapshot.battle_id) {
-        auto battle_snapshot = runtime->snapshot(*room_snapshot.battle_id);
-        if (battle_snapshot && battle_snapshot.value().players.contains(player_id)) {
-            const auto& battle_player = battle_snapshot.value().players.at(player_id);
+    if (battle_snapshot) {
+        if (battle_snapshot->players.contains(player_id)) {
+            const auto& battle_player = battle_snapshot->players.at(player_id);
+            response["alive"] = battle_player.alive;
+            response["health"] = battle_player.health;
+        } else {
+            response["alive"] = nullptr;
+            response["health"] = nullptr;
+        }
+    } else if (runtime && room_snapshot.battle_id) {
+        auto current_battle_snapshot = runtime->snapshot(*room_snapshot.battle_id);
+        if (current_battle_snapshot && current_battle_snapshot.value().players.contains(player_id)) {
+            const auto& battle_player = current_battle_snapshot.value().players.at(player_id);
             response["alive"] = battle_player.alive;
             response["health"] = battle_player.health;
         } else {
@@ -510,7 +531,7 @@ void WebSocketBroadcaster::publish_accepted_event(const protocol::EventEnvelope&
     }
 
     for (const auto& player_id : battle_player_ids_for_event(envelope, snapshot)) {
-        const auto status = make_player_status_json(*room_snapshot, runtime, player_id);
+        const auto status = make_player_status_json(*room_snapshot, player_id, &snapshot, nullptr);
         if (!status) {
             continue;
         }
@@ -572,7 +593,7 @@ void WebSocketBroadcaster::publish_room_updated(const room::RoomEventEnvelope& e
         runtime = runtime_;
     }
     for (const auto& player_id : room_player_ids_for_event(envelope, snapshot)) {
-        const auto status = make_player_status_json(snapshot, runtime, player_id);
+        const auto status = make_player_status_json(snapshot, player_id, nullptr, runtime);
         publish_message({
             {"type", "player_status_updated"},
             {"event", room::to_json(envelope)},
@@ -757,6 +778,9 @@ ApServer::HttpResponse ApServer::handle_request(const HttpRequest& request) {
     if (target == "/sim" || target == "/sim/" || starts_with(target, "/sim/")) {
         return handle_sim_request(request, target);
     }
+    if (target == "/app" || target == "/app/" || starts_with(target, "/app/")) {
+        return handle_app_page_request(request, target);
+    }
 
     if (request.method() == http::verb::post && target == "/api/v0/events") {
         auto envelope = protocol::parse_event_json(request.body());
@@ -789,7 +813,8 @@ ApServer::HttpResponse ApServer::handle_request(const HttpRequest& request) {
         return handle_room_request(request, std::move(target));
     }
     if (target == "/api/v1/rooms" || starts_with(target, "/api/v1/rooms/") ||
-        target == "/api/v1/players" || starts_with(target, "/api/v1/players/")) {
+        target == "/api/v1/players" || starts_with(target, "/api/v1/players/") ||
+        target == "/api/v1/battles" || starts_with(target, "/api/v1/battles/")) {
         return handle_app_query_request(request, std::move(target));
     }
 
@@ -869,6 +894,36 @@ ApServer::HttpResponse ApServer::handle_sim_request(const HttpRequest& request, 
     }
 
     auto body = read_text_file(sim_asset_path(asset));
+    if (!body) {
+        return json_response(status_for(body.error()), error_body(body.error()), request.version(),
+                             request.keep_alive());
+    }
+    return text_response(http::status::ok, std::move(body).value(), std::move(content_type),
+                         request.version(), request.keep_alive());
+}
+
+ApServer::HttpResponse ApServer::handle_app_page_request(const HttpRequest& request, std::string target) {
+    if (request.method() != http::verb::get) {
+        return json_response(http::status::not_found,
+                             error_body({ErrorCode::NotFound, "endpoint not found"}),
+                             request.version(), request.keep_alive());
+    }
+
+    std::string asset = "index.html";
+    std::string content_type = "text/html; charset=utf-8";
+    if (target == "/app/styles.css") {
+        asset = "styles.css";
+        content_type = "text/css; charset=utf-8";
+    } else if (target == "/app/app.js") {
+        asset = "app.js";
+        content_type = "application/javascript; charset=utf-8";
+    } else if (target != "/app" && target != "/app/") {
+        return json_response(http::status::not_found,
+                             error_body({ErrorCode::NotFound, "app asset not found"}),
+                             request.version(), request.keep_alive());
+    }
+
+    auto body = read_text_file(app_asset_path(asset));
     if (!body) {
         return json_response(status_for(body.error()), error_body(body.error()), request.version(),
                              request.keep_alive());
@@ -1072,6 +1127,40 @@ ApServer::HttpResponse ApServer::handle_app_query_request(const HttpRequest& req
                              request.version(), request.keep_alive());
     }
 
+    if (request.method() == http::verb::post && parts.size() == 3 && parts[2] == "rooms") {
+        auto body = parse_json_body(request.body());
+        if (!body) {
+            return json_response(status_for(body.error()), error_body(body.error()),
+                                 request.version(), request.keep_alive());
+        }
+        const auto timestamp = json_i64_or(body.value(), "occurred_at_ms", now_ms());
+        const auto room_id = json_string_or(body.value(), "room_id", generated_id("room", timestamp));
+        nlohmann::json payload = body.value();
+        payload.erase("event_id");
+        payload.erase("event_type");
+        payload.erase("room_id");
+        payload.erase("source_id");
+        payload.erase("sequence");
+        payload.erase("occurred_at_ms");
+        if (!payload.contains("room_code")) {
+            payload["room_code"] = room_id;
+        }
+
+        auto envelope = make_room_envelope(body.value(), room_id, "room_created", std::move(payload));
+        auto result = room_runtime_.submit_event(envelope);
+        if (result.status == room_runtime::SubmitRoomEventResult::Status::Accepted ||
+            result.status == room_runtime::SubmitRoomEventResult::Status::Duplicate) {
+            auto detail = make_room_detail_json(result.snapshot);
+            detail["ok"] = true;
+            return json_response(http::status::ok, std::move(detail), request.version(),
+                                 request.keep_alive());
+        }
+
+        const auto error =
+            result.error.value_or(Error{ErrorCode::Internal, "unknown room runtime error"});
+        return json_response(status_for(error), error_body(error), request.version(), request.keep_alive());
+    }
+
     if (request.method() == http::verb::get && parts.size() == 3 && parts[2] == "rooms") {
         nlohmann::json rooms = nlohmann::json::array();
         for (const auto& snapshot : room_runtime_.snapshots()) {
@@ -1112,8 +1201,14 @@ ApServer::HttpResponse ApServer::handle_app_query_request(const HttpRequest& req
             }
         }
 
-        if (request.method() == http::verb::post && parts.size() == 5 &&
-            (parts[4] == "join" || parts[4] == "leave")) {
+        if (request.method() == http::verb::post &&
+            ((parts.size() == 5 && (parts[4] == "join" || parts[4] == "leave" || parts[4] == "start" ||
+                                    parts[4] == "close" || parts[4] == "devices" ||
+                                    parts[4] == "positions")) ||
+             (parts.size() == 7 &&
+              ((parts[4] == "players" && parts[6] == "ready") ||
+               (parts[4] == "devices" &&
+                (parts[6] == "bind" || parts[6] == "unbind" || parts[6] == "heartbeat")))))) {
             auto body = parse_json_body(request.body());
             if (!body) {
                 return json_response(status_for(body.error()), error_body(body.error()), request.version(),
@@ -1121,11 +1216,14 @@ ApServer::HttpResponse ApServer::handle_app_query_request(const HttpRequest& req
             }
 
             std::optional<room::RoomEventEnvelope> envelope;
+            bool start_room_command = false;
+            std::int64_t start_duration_ms = 0;
+            std::int64_t start_occurred_at_ms = 0;
             if (parts[4] == "join") {
                 nlohmann::json payload = body.value();
                 envelope =
                     make_room_envelope(body.value(), room_id, "room_player_joined", std::move(payload));
-            } else {
+            } else if (parts[4] == "leave") {
                 nlohmann::json payload = body.value();
                 const auto player_id = json_string_or(payload, "player_id", "");
                 if (player_id.empty()) {
@@ -1136,12 +1234,64 @@ ApServer::HttpResponse ApServer::handle_app_query_request(const HttpRequest& req
                 payload["player_id"] = player_id;
                 envelope =
                     make_room_envelope(body.value(), room_id, "room_player_left", std::move(payload));
+            } else if (parts[4] == "start") {
+                nlohmann::json payload = body.value();
+                if (!payload.contains("battle_id")) {
+                    payload["battle_id"] = generated_id("battle", now_ms());
+                }
+                start_room_command = true;
+                start_duration_ms = json_i64_or(payload, "duration_ms", 600000);
+                start_occurred_at_ms = json_i64_or(body.value(), "occurred_at_ms", now_ms());
+                envelope = make_room_envelope(body.value(), room_id, "room_started", std::move(payload));
+            } else if (parts[4] == "close") {
+                envelope = make_room_envelope(body.value(), room_id, "room_closed", nlohmann::json::object());
+            } else if (parts[4] == "devices" && parts.size() == 5) {
+                nlohmann::json payload = body.value();
+                envelope = make_room_envelope(body.value(), room_id, "room_device_registered", std::move(payload));
+            } else if (parts[4] == "positions" && parts.size() == 5) {
+                nlohmann::json payload = body.value();
+                envelope =
+                    make_room_envelope(body.value(), room_id, "room_player_position_updated", std::move(payload));
+            } else if (parts[4] == "players" && parts[6] == "ready") {
+                nlohmann::json payload = body.value();
+                payload["player_id"] = parts[5];
+                envelope =
+                    make_room_envelope(body.value(), room_id, "room_player_ready_changed", std::move(payload));
+            } else if (parts[4] == "devices" && parts[6] == "bind") {
+                nlohmann::json payload = body.value();
+                payload["device_id"] = parts[5];
+                envelope = make_room_envelope(body.value(), room_id, "room_device_bound", std::move(payload));
+            } else if (parts[4] == "devices" && parts[6] == "unbind") {
+                nlohmann::json payload = {{"device_id", parts[5]}};
+                envelope = make_room_envelope(body.value(), room_id, "room_device_unbound", std::move(payload));
+            } else if (parts[4] == "devices" && parts[6] == "heartbeat") {
+                nlohmann::json payload = body.value();
+                payload["device_id"] = parts[5];
+                envelope =
+                    make_room_envelope(body.value(), room_id, "room_device_heartbeat_updated", std::move(payload));
             }
 
             auto result = room_runtime_.submit_event(*envelope);
             if (result.status == room_runtime::SubmitRoomEventResult::Status::Accepted ||
                 result.status == room_runtime::SubmitRoomEventResult::Status::Duplicate) {
-                return room_detail_response(result.snapshot);
+                auto detail = make_room_detail_json(result.snapshot);
+                detail["ok"] = true;
+                if (start_room_command && result.status == room_runtime::SubmitRoomEventResult::Status::Accepted) {
+                    auto started =
+                        start_battle_from_room(result.snapshot, start_occurred_at_ms, start_duration_ms);
+                    if (!started) {
+                        return json_response(status_for(started.error()), error_body(started.error()),
+                                             request.version(), request.keep_alive());
+                    }
+                    if (result.snapshot.battle_id) {
+                        auto battle_snapshot = runtime_.snapshot(*result.snapshot.battle_id);
+                        if (battle_snapshot) {
+                            detail["battle_snapshot"] = protocol::to_json(battle_snapshot.value());
+                        }
+                    }
+                }
+                return json_response(http::status::ok, std::move(detail), request.version(),
+                                     request.keep_alive());
             }
 
             const auto error =
@@ -1156,7 +1306,7 @@ ApServer::HttpResponse ApServer::handle_app_query_request(const HttpRequest& req
             if (!contains_player(room_snapshot, player_id)) {
                 continue;
             }
-            auto response = make_player_status_json(room_snapshot, &runtime_, player_id);
+            auto response = make_player_status_json(room_snapshot, player_id, nullptr, &runtime_);
             if (!response) {
                 break;
             }
@@ -1168,6 +1318,81 @@ ApServer::HttpResponse ApServer::handle_app_query_request(const HttpRequest& req
         return json_response(http::status::not_found,
                              error_body({ErrorCode::NotFound, "player not found"}),
                              request.version(), request.keep_alive());
+    }
+
+    if (request.method() == http::verb::get && parts.size() == 4 && parts[2] == "battles") {
+        const auto& battle_id = parts[3];
+        auto snapshot = runtime_.snapshot(battle_id);
+        if (!snapshot) {
+            return json_response(status_for(snapshot.error()), error_body(snapshot.error()),
+                                 request.version(), request.keep_alive());
+        }
+        auto battle_json = protocol::to_json(snapshot.value());
+        battle_json["ok"] = true;
+        return json_response(http::status::ok, std::move(battle_json), request.version(),
+                             request.keep_alive());
+    }
+
+    if (request.method() == http::verb::post && parts.size() == 5 && parts[2] == "battles" &&
+        (parts[4] == "pause" || parts[4] == "resume" || parts[4] == "end" || parts[4] == "shot" ||
+         parts[4] == "hit")) {
+        const auto& battle_id = parts[3];
+        auto body = parse_json_body(request.body());
+        if (!body) {
+            return json_response(status_for(body.error()), error_body(body.error()), request.version(),
+                                 request.keep_alive());
+        }
+
+        std::string event_type;
+        nlohmann::json payload = nlohmann::json::object();
+        if (parts[4] == "pause") {
+            event_type = "battle_paused";
+            payload["reason"] = json_string_or(body.value(), "reason", "operator");
+        } else if (parts[4] == "resume") {
+            event_type = "battle_resumed";
+        } else if (parts[4] == "end") {
+            event_type = "battle_ended";
+            payload["reason"] = json_string_or(body.value(), "reason", "manual");
+        } else if (parts[4] == "shot") {
+            event_type = "shot";
+            payload["player_id"] = json_string_or(body.value(), "player_id", "");
+            payload["weapon_id"] = json_string_or(body.value(), "weapon_id", "rifle-01");
+            payload["ammo_after"] = body.value().contains("ammo_after") ? body.value().at("ammo_after")
+                                                                         : nlohmann::json(0);
+        } else {
+            event_type = "hit";
+            payload["attacker_player_id"] = json_string_or(body.value(), "attacker_player_id", "");
+            payload["target_player_id"] = json_string_or(body.value(), "target_player_id", "");
+            payload["weapon_id"] = json_string_or(body.value(), "weapon_id", "rifle-01");
+            payload["damage"] = body.value().contains("damage") ? body.value().at("damage")
+                                                                : nlohmann::json(10);
+            payload["hit_zone"] = json_string_or(body.value(), "hit_zone", "torso");
+        }
+
+        const auto timestamp = json_i64_or(body.value(), "occurred_at_ms", now_ms());
+        protocol::EventEnvelope envelope;
+        envelope.schema_version = protocol::kSchemaVersion;
+        envelope.event_id = json_string_or(body.value(), "event_id", generated_id("battle-evt", timestamp));
+        envelope.event_type = std::move(event_type);
+        envelope.battle_id = battle_id;
+        envelope.source_id = json_string_or(body.value(), "source_id", "app-http");
+        envelope.sequence = json_u64_or(body.value(), "sequence", static_cast<std::uint64_t>(timestamp));
+        envelope.occurred_at_ms = timestamp;
+        envelope.payload = std::move(payload);
+        envelope.raw = protocol::to_json(envelope);
+
+        auto result = runtime_.submit_event(envelope);
+        if (result.status == ap_runtime::SubmitEventResult::Status::Accepted ||
+            result.status == ap_runtime::SubmitEventResult::Status::Duplicate) {
+            auto battle_json = protocol::to_json(result.snapshot);
+            battle_json["ok"] = true;
+            return json_response(http::status::ok, std::move(battle_json), request.version(),
+                                 request.keep_alive());
+        }
+
+        const auto error =
+            result.error.value_or(Error{ErrorCode::Internal, "unknown battle runtime error"});
+        return json_response(status_for(error), error_body(error), request.version(), request.keep_alive());
     }
 
     return json_response(http::status::not_found,

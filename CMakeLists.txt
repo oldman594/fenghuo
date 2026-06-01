@@ -29,6 +29,7 @@ target_compile_definitions(fenghuo_ap
     PRIVATE
         FENGHUO_CONSOLE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/apps/console"
         FENGHUO_SIM_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/apps/sim"
+        FENGHUO_APP_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/apps/app"
 )
 target_link_libraries(fenghuo_ap
     PUBLIC

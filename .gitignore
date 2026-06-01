@@ -1,6 +1,7 @@
 build/
 cmake-build-*/
 .cache/
+.local/
 *.o
 *.a
 *.so
@@ -8,3 +9,6 @@ cmake-build-*/
 *.dll
 *.exe
 *.jsonl
+tools/android/*.tar.gz
+tools/android/*.tar.xz
+tools/android/*.zip

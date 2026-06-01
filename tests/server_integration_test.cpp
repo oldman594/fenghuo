@@ -9,7 +9,6 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
@@ -196,7 +195,8 @@ void test_http_post_snapshot_and_websocket_live() {
     expect(lines == 6, "JSONL store should contain accepted events only");
 
     beast::error_code ignored;
-    ws.close(websocket::close_code::normal, ignored);
+    ws.next_layer().shutdown(Tcp::socket::shutdown_both, ignored);
+    ws.next_layer().close(ignored);
     server.expect_clean_shutdown();
     std::filesystem::remove_all(root);
 }
@@ -321,7 +321,8 @@ void test_http_room_endpoints() {
     expect(lines == 4, "room JSONL store should contain accepted room events only");
 
     beast::error_code ignored;
-    ws.close(websocket::close_code::normal, ignored);
+    ws.next_layer().shutdown(Tcp::socket::shutdown_both, ignored);
+    ws.next_layer().close(ignored);
     server.expect_clean_shutdown();
     std::filesystem::remove_all(root);
 }
@@ -622,29 +623,35 @@ void test_websocket_map_updated_message() {
     expect(position_response.result() == http::status::accepted, "map websocket position should update");
 
     beast::flat_buffer buffer;
-    auto room_message = read_message(buffer);
-    expect(room_message.at("type") == "room_updated", "first websocket message should remain room_updated");
-
-    auto summary_message = read_message(buffer);
-    expect(summary_message.at("type") == "room_summary_updated",
-           "second websocket message should be room_summary_updated");
-
-    auto detail_message = read_message(buffer);
-    expect(detail_message.at("type") == "room_detail_updated",
-           "third websocket message should be room_detail_updated");
-
-    auto player_status = read_message(buffer);
-    expect(player_status.at("type") == "player_status_updated",
-           "fourth websocket message should be player_status_updated");
-
-    auto map_message = read_message(buffer);
-    expect(map_message.at("type") == "map_updated", "second websocket message should be map_updated");
-    expect(map_message.at("room_id") == "room-map-ws-001", "map_updated should include room id");
-    expect(map_message.at("positions").at("p-red-01").at("x") == 12.5,
+    bool room_updated_seen = false;
+    bool room_summary_seen = false;
+    bool room_detail_seen = false;
+    bool player_status_seen = false;
+    std::optional<nlohmann::json> map_message;
+    while (!room_updated_seen || !room_summary_seen || !room_detail_seen || !player_status_seen ||
+           !map_message.has_value()) {
+        auto message = read_message(buffer);
+        const auto type = message.at("type").get<std::string>();
+        if (type == "room_updated") {
+            room_updated_seen = true;
+        } else if (type == "room_summary_updated") {
+            room_summary_seen = true;
+        } else if (type == "room_detail_updated") {
+            room_detail_seen = true;
+        } else if (type == "player_status_updated") {
+            player_status_seen = true;
+        } else if (type == "map_updated") {
+            map_message = std::move(message);
+        }
+    }
+    expect(map_message->at("type") == "map_updated", "position update should publish map_updated");
+    expect(map_message->at("room_id") == "room-map-ws-001", "map_updated should include room id");
+    expect(map_message->at("positions").at("p-red-01").at("x") == 12.5,
            "map_updated should include latest player position");
 
     beast::error_code ignored;
-    ws.close(websocket::close_code::normal, ignored);
+    ws.next_layer().shutdown(Tcp::socket::shutdown_both, ignored);
+    ws.next_layer().close(ignored);
     server.expect_clean_shutdown();
     std::filesystem::remove_all(root);
 }
@@ -758,7 +765,8 @@ void test_websocket_app_aggregate_messages() {
            "player_status_updated should include latest ready state");
 
     beast::error_code ignored;
-    ws.close(websocket::close_code::normal, ignored);
+    ws.next_layer().shutdown(Tcp::socket::shutdown_both, ignored);
+    ws.next_layer().close(ignored);
     server.expect_clean_shutdown();
     std::filesystem::remove_all(root);
 }
@@ -826,23 +834,47 @@ void test_websocket_player_status_updated_from_battle() {
                {"team_id", "blue"},
                {"module_id", "module-blue-01"}},
               http::status::accepted, 4);
-    post_room(http::verb::post, "/api/v0/rooms/room-battle-ws-001/start",
+    post_room(http::verb::post, "/api/v0/rooms/room-battle-ws-001/players/p-red-01/ready",
               {{"event_id", "room-battle-ws-evt-004"},
                {"source_id", "room-battle-ws-test"},
                {"sequence", 4},
                {"occurred_at_ms", 1730000090004},
+               {"ready", true}},
+              http::status::accepted, 4);
+    post_room(http::verb::post, "/api/v0/rooms/room-battle-ws-001/players/p-blue-01/ready",
+              {{"event_id", "room-battle-ws-evt-005"},
+               {"source_id", "room-battle-ws-test"},
+               {"sequence", 5},
+               {"occurred_at_ms", 1730000090005},
+               {"ready", true}},
+              http::status::accepted, 4);
+    post_room(http::verb::post, "/api/v0/rooms/room-battle-ws-001/start",
+              {{"event_id", "room-battle-ws-evt-006"},
+               {"source_id", "room-battle-ws-test"},
+               {"sequence", 6},
+               {"occurred_at_ms", 1730000090006},
                {"battle_id", "battle-battle-ws-001"},
                {"duration_ms", 600000}},
               http::status::accepted, 12);
 
     auto hit_response = http_request(
         server.port(), http::verb::post, "/api/v0/events",
-        event_json("battle-ws-hit-001", "hit", 10,
-                   {{"attacker_player_id", "p-red-01"},
-                    {"target_player_id", "p-blue-01"},
-                    {"weapon_id", "rifle-01"},
-                    {"damage", 10},
-                    {"hit_zone", "torso"}}));
+        nlohmann::json{
+            {"schema_version", 0},
+            {"event_id", "battle-ws-hit-001"},
+            {"event_type", "hit"},
+            {"battle_id", "battle-battle-ws-001"},
+            {"source_id", "sim-http"},
+            {"sequence", 10},
+            {"occurred_at_ms", 1730000090010},
+            {"payload",
+             {{"attacker_player_id", "p-red-01"},
+              {"target_player_id", "p-blue-01"},
+              {"weapon_id", "rifle-01"},
+              {"damage", 10},
+              {"hit_zone", "torso"}}},
+        }
+            .dump());
     expect(hit_response.result() == http::status::accepted, "battle hit should be accepted");
 
     beast::flat_buffer buffer;
@@ -850,24 +882,32 @@ void test_websocket_player_status_updated_from_battle() {
     expect(accepted_event.at("type") == "accepted_event",
            "battle event should still publish accepted_event first");
 
-    auto attacker_status = read_message(buffer);
-    expect(attacker_status.at("type") == "player_status_updated",
-           "battle hit should publish attacker player_status_updated");
-    expect(attacker_status.at("player_id") == "p-red-01",
-           "first player status should target attacker");
+    std::optional<nlohmann::json> attacker_status;
+    std::optional<nlohmann::json> target_status;
+    while (!attacker_status.has_value() || !target_status.has_value()) {
+        auto status_message = read_message(buffer);
+        expect(status_message.at("type") == "player_status_updated",
+               "battle hit should publish player_status_updated");
+        const auto player_id = status_message.at("player_id").get<std::string>();
+        if (player_id == "p-red-01") {
+            attacker_status = std::move(status_message);
+        } else if (player_id == "p-blue-01") {
+            target_status = std::move(status_message);
+        }
+    }
 
-    auto target_status = read_message(buffer);
-    expect(target_status.at("type") == "player_status_updated",
+    expect(attacker_status->at("player_id") == "p-red-01",
+           "battle hit should publish attacker player_status_updated");
+    expect(target_status->at("player_id") == "p-blue-01",
            "battle hit should publish target player_status_updated");
-    expect(target_status.at("player_id") == "p-blue-01",
-           "second player status should target hit player");
-    expect(target_status.at("status").at("health") == 90,
+    expect(target_status->at("status").at("health") == 90,
            "battle player_status_updated should include reduced health");
-    expect(target_status.at("status").at("alive") == true,
+    expect(target_status->at("status").at("alive") == true,
            "battle player_status_updated should include alive state");
 
     beast::error_code ignored;
-    ws.close(websocket::close_code::normal, ignored);
+    ws.next_layer().shutdown(Tcp::socket::shutdown_both, ignored);
+    ws.next_layer().close(ignored);
     server.expect_clean_shutdown();
     std::filesystem::remove_all(root);
 }
@@ -1005,6 +1045,12 @@ void test_http_app_aggregate_queries() {
     expect(status_body.at("alive") == true, "player status should include battle alive state");
     expect(status_body.at("health") == 100, "player status should include battle health");
 
+    auto battle_response = http_request(server.port(), http::verb::get, "/api/v1/battles/battle-app-001");
+    expect(battle_response.result() == http::status::ok, "GET /api/v1/battles/{battle_id} should return 200");
+    auto battle_body = nlohmann::json::parse(battle_response.body());
+    expect(battle_body.at("battle_id") == "battle-app-001", "app battle query should include battle id");
+    expect(battle_body.at("phase") == "active", "app battle query should include battle phase");
+
     server.expect_clean_shutdown();
     std::filesystem::remove_all(root);
 }
@@ -1068,6 +1114,598 @@ void test_http_app_join_and_leave_commands() {
     std::filesystem::remove_all(root);
 }
 
+void test_http_app_create_room_command() {
+    const auto root = std::filesystem::temp_directory_path() / "fenghuo-server-app-create-room-test";
+    std::filesystem::remove_all(root);
+
+    RunningServer server(root);
+
+    auto create_response = http_request(
+        server.port(), http::verb::post, "/api/v1/rooms",
+        nlohmann::json{{"event_id", "room-app-create-evt-001"},
+                       {"source_id", "room-app-create-test"},
+                       {"sequence", 1},
+                       {"occurred_at_ms", 1730000130001},
+                       {"room_id", "room-app-create-001"},
+                       {"name", "App create room"},
+                       {"mode", "team_deathmatch"},
+                       {"max_players", 4},
+                       {"teams",
+                        nlohmann::json::array({{{"team_id", "red"},
+                                                {"display_name", "Red"},
+                                                {"max_players", 2}},
+                                               {{"team_id", "blue"},
+                                                {"display_name", "Blue"},
+                                                {"max_players", 2}}})}}
+            .dump());
+    expect(create_response.result() == http::status::ok, "app create room should return 200");
+    auto create_body = nlohmann::json::parse(create_response.body());
+    expect(create_body.at("room").at("room_id") == "room-app-create-001",
+           "app create room should return room detail");
+    expect(create_body.at("room").at("phase") == "open",
+           "app create room should open room");
+
+    auto list_response = http_request(server.port(), http::verb::get, "/api/v1/rooms");
+    expect(list_response.result() == http::status::ok, "app room list should return 200");
+    auto list_body = nlohmann::json::parse(list_response.body());
+    expect(list_body.at("rooms").size() == 1, "app room list should include created room");
+
+    server.expect_clean_shutdown();
+    std::filesystem::remove_all(root);
+}
+
+void test_http_app_position_command() {
+    const auto root = std::filesystem::temp_directory_path() / "fenghuo-server-app-position-test";
+    std::filesystem::remove_all(root);
+
+    RunningServer server(root);
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v0/rooms",
+               nlohmann::json{{"room_id", "room-app-position-001"},
+                              {"event_id", "room-app-position-evt-001"},
+                              {"source_id", "room-app-position-test"},
+                              {"sequence", 1},
+                              {"occurred_at_ms", 1730000110001},
+                              {"name", "App position room"},
+                              {"mode", "team_deathmatch"},
+                              {"max_players", 2},
+                              {"teams",
+                               nlohmann::json::array({{{"team_id", "red"},
+                                                       {"display_name", "Red"},
+                                                       {"max_players", 1}},
+                                                      {{"team_id", "blue"},
+                                                       {"display_name", "Blue"},
+                                                       {"max_players", 1}}})}}
+                   .dump())
+               .result() == http::status::created,
+           "app position room should be created");
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-position-001/join",
+               nlohmann::json{{"event_id", "room-app-position-evt-002"},
+                              {"source_id", "room-app-position-test"},
+                              {"sequence", 2},
+                              {"occurred_at_ms", 1730000110002},
+                              {"player_id", "p-red-01"},
+                              {"display_name", "Red 01"},
+                              {"team_id", "red"},
+                              {"module_id", "module-red-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "app position player should join");
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-position-001/devices",
+               nlohmann::json{{"event_id", "room-app-position-evt-003"},
+                              {"source_id", "room-app-position-test"},
+                              {"sequence", 3},
+                              {"occurred_at_ms", 1730000110003},
+                              {"device_id", "device-head-red-01"},
+                              {"device_kind", "headset_receiver"},
+                              {"display_name", "Red Headset"}}
+                   .dump())
+               .result() == http::status::ok,
+           "app position device should register");
+
+    expect(http_request(
+               server.port(), http::verb::post,
+               "/api/v1/rooms/room-app-position-001/devices/device-head-red-01/bind",
+               nlohmann::json{{"event_id", "room-app-position-evt-004"},
+                              {"source_id", "room-app-position-test"},
+                              {"sequence", 4},
+                              {"occurred_at_ms", 1730000110004},
+                              {"player_id", "p-red-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "app position device should bind");
+
+    auto position_response = http_request(
+        server.port(), http::verb::post, "/api/v1/rooms/room-app-position-001/positions",
+        nlohmann::json{{"event_id", "room-app-position-evt-005"},
+                       {"source_id", "room-app-position-test"},
+                       {"sequence", 5},
+                       {"occurred_at_ms", 1730000110005},
+                       {"player_id", "p-red-01"},
+                       {"source_device_id", "device-head-red-01"},
+                       {"x", 42.25},
+                       {"y", 19.75},
+                       {"heading_deg", 450.0},
+                       {"velocity_mps", 2.5}}
+            .dump());
+    expect(position_response.result() == http::status::ok, "app position command should return 200");
+    auto position_body = nlohmann::json::parse(position_response.body());
+    expect(position_body.at("positions").at("p-red-01").at("x") == 42.25,
+           "app position command should return room detail with latest x");
+    expect(position_body.at("positions").at("p-red-01").at("heading_deg") == 90.0,
+           "app position command should return normalized heading");
+
+    auto map_response =
+        http_request(server.port(), http::verb::get, "/api/v1/rooms/room-app-position-001/map");
+    expect(map_response.result() == http::status::ok, "app map query should return 200 after position write");
+    auto map_body = nlohmann::json::parse(map_response.body());
+    expect(map_body.at("positions").at("p-red-01").at("source_device_id") == "device-head-red-01",
+           "app map query should include position source device");
+
+    server.expect_clean_shutdown();
+    std::filesystem::remove_all(root);
+}
+
+void test_http_app_ready_start_and_close_commands() {
+    const auto root = std::filesystem::temp_directory_path() / "fenghuo-server-app-room-ops-test";
+    std::filesystem::remove_all(root);
+
+    RunningServer server(root);
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v0/rooms",
+               nlohmann::json{{"room_id", "room-app-ops-001"},
+                              {"event_id", "room-app-ops-evt-001"},
+                              {"source_id", "room-app-ops-test"},
+                              {"sequence", 1},
+                              {"occurred_at_ms", 1730000100001},
+                              {"name", "App ops room"},
+                              {"mode", "team_deathmatch"},
+                              {"max_players", 2},
+                              {"teams",
+                               nlohmann::json::array({{{"team_id", "red"},
+                                                       {"display_name", "Red"},
+                                                       {"max_players", 1}},
+                                                      {{"team_id", "blue"},
+                                                       {"display_name", "Blue"},
+                                                       {"max_players", 1}}})}}
+                   .dump())
+               .result() == http::status::created,
+           "app ops room should be created");
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-ops-001/join",
+               nlohmann::json{{"event_id", "room-app-ops-evt-002"},
+                              {"source_id", "room-app-ops-test"},
+                              {"sequence", 2},
+                              {"occurred_at_ms", 1730000100002},
+                              {"player_id", "p-red-01"},
+                              {"display_name", "Red 01"},
+                              {"team_id", "red"},
+                              {"module_id", "module-red-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "app ops join should succeed");
+
+    expect(http_request(
+               server.port(), http::verb::post,
+               "/api/v1/rooms/room-app-ops-001/players/p-red-01/ready",
+               nlohmann::json{{"event_id", "room-app-ops-evt-003"},
+                              {"source_id", "room-app-ops-test"},
+                              {"sequence", 3},
+                              {"occurred_at_ms", 1730000100003},
+                              {"ready", true}}
+                   .dump())
+               .result() == http::status::ok,
+           "app ops ready should succeed");
+
+    auto ready_body = nlohmann::json::parse(http_request(
+                                                server.port(), http::verb::post,
+                                                "/api/v1/rooms/room-app-ops-001/players/p-red-01/ready",
+                                                nlohmann::json{{"event_id", "room-app-ops-evt-003"},
+                                                               {"source_id", "room-app-ops-test"},
+                                                               {"sequence", 3},
+                                                               {"occurred_at_ms", 1730000100003},
+                                                               {"ready", true}}
+                                                    .dump())
+                                                .body());
+    expect(ready_body.at("players").at("p-red-01").at("ready") == true,
+           "app ready response should include ready player");
+
+    auto start_response = http_request(
+        server.port(), http::verb::post, "/api/v1/rooms/room-app-ops-001/start",
+        nlohmann::json{{"event_id", "room-app-ops-evt-004"},
+                       {"source_id", "room-app-ops-test"},
+                       {"sequence", 4},
+                       {"occurred_at_ms", 1730000100004},
+                       {"battle_id", "battle-app-ops-001"},
+                       {"duration_ms", 600000}}
+            .dump());
+    expect(start_response.result() == http::status::ok, "app start should return 200");
+    auto start_body = nlohmann::json::parse(start_response.body());
+    expect(start_body.at("room").at("phase") == "active", "app start should return active room");
+    expect(start_body.at("battle_snapshot").at("battle_id") == "battle-app-ops-001",
+           "app start should include battle snapshot");
+
+    auto close_response = http_request(
+        server.port(), http::verb::post, "/api/v1/rooms/room-app-ops-001/close",
+        nlohmann::json{{"event_id", "room-app-ops-evt-005"},
+                       {"source_id", "room-app-ops-test"},
+                       {"sequence", 5},
+                       {"occurred_at_ms", 1730000100005}}
+            .dump());
+    expect(close_response.result() == http::status::conflict,
+           "app close should respect room phase constraints");
+
+    server.expect_clean_shutdown();
+    std::filesystem::remove_all(root);
+}
+
+void test_http_app_device_commands() {
+    const auto root = std::filesystem::temp_directory_path() / "fenghuo-server-app-device-ops-test";
+    std::filesystem::remove_all(root);
+
+    RunningServer server(root);
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v0/rooms",
+               nlohmann::json{{"room_id", "room-app-device-ops-001"},
+                              {"event_id", "room-app-device-ops-evt-001"},
+                              {"source_id", "room-app-device-ops-test"},
+                              {"sequence", 1},
+                              {"occurred_at_ms", 1730000110001},
+                              {"name", "App device ops room"},
+                              {"mode", "team_deathmatch"},
+                              {"max_players", 2},
+                              {"teams",
+                               nlohmann::json::array({{{"team_id", "red"},
+                                                       {"display_name", "Red"},
+                                                       {"max_players", 1}},
+                                                      {{"team_id", "blue"},
+                                                       {"display_name", "Blue"},
+                                                       {"max_players", 1}}})}}
+                   .dump())
+               .result() == http::status::created,
+           "app device ops room should be created");
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-device-ops-001/join",
+               nlohmann::json{{"event_id", "room-app-device-ops-evt-002"},
+                              {"source_id", "room-app-device-ops-test"},
+                              {"sequence", 2},
+                              {"occurred_at_ms", 1730000110002},
+                              {"player_id", "p-red-01"},
+                              {"display_name", "Red 01"},
+                              {"team_id", "red"},
+                              {"module_id", "module-red-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "app device ops join should succeed");
+
+    auto register_response = http_request(
+        server.port(), http::verb::post, "/api/v1/rooms/room-app-device-ops-001/devices",
+        nlohmann::json{{"event_id", "room-app-device-ops-evt-003"},
+                       {"source_id", "room-app-device-ops-test"},
+                       {"sequence", 3},
+                       {"occurred_at_ms", 1730000110003},
+                       {"device_id", "device-head-red-01"},
+                       {"device_kind", "headset_receiver"},
+                       {"display_name", "Red Headset"},
+                       {"battery_percent", 91},
+                       {"signal_strength", 82}}
+            .dump());
+    expect(register_response.result() == http::status::ok, "app device register should return 200");
+    auto register_body = nlohmann::json::parse(register_response.body());
+    expect(register_body.at("devices").at("device-head-red-01").at("device_kind") == "headset_receiver",
+           "app device register should return room detail with device");
+
+    auto bind_response = http_request(
+        server.port(), http::verb::post,
+        "/api/v1/rooms/room-app-device-ops-001/devices/device-head-red-01/bind",
+        nlohmann::json{{"event_id", "room-app-device-ops-evt-004"},
+                       {"source_id", "room-app-device-ops-test"},
+                       {"sequence", 4},
+                       {"occurred_at_ms", 1730000110004},
+                       {"player_id", "p-red-01"}}
+            .dump());
+    expect(bind_response.result() == http::status::ok, "app device bind should return 200");
+    auto bind_body = nlohmann::json::parse(bind_response.body());
+    expect(bind_body.at("devices").at("device-head-red-01").at("bound_player_id") == "p-red-01",
+           "app device bind should include bound player");
+
+    auto heartbeat_response = http_request(
+        server.port(), http::verb::post,
+        "/api/v1/rooms/room-app-device-ops-001/devices/device-head-red-01/heartbeat",
+        nlohmann::json{{"event_id", "room-app-device-ops-evt-005"},
+                       {"source_id", "room-app-device-ops-test"},
+                       {"sequence", 5},
+                       {"occurred_at_ms", 1730000110005},
+                       {"battery_percent", 88},
+                       {"signal_strength", 75},
+                       {"online", false}}
+            .dump());
+    expect(heartbeat_response.result() == http::status::ok, "app device heartbeat should return 200");
+    auto heartbeat_body = nlohmann::json::parse(heartbeat_response.body());
+    expect(heartbeat_body.at("devices").at("device-head-red-01").at("online") == false,
+           "app device heartbeat should update online state");
+
+    auto unbind_response = http_request(
+        server.port(), http::verb::post,
+        "/api/v1/rooms/room-app-device-ops-001/devices/device-head-red-01/unbind",
+        nlohmann::json{{"event_id", "room-app-device-ops-evt-006"},
+                       {"source_id", "room-app-device-ops-test"},
+                       {"sequence", 6},
+                       {"occurred_at_ms", 1730000110006}}
+            .dump());
+    expect(unbind_response.result() == http::status::ok, "app device unbind should return 200");
+    auto unbind_body = nlohmann::json::parse(unbind_response.body());
+    expect(unbind_body.at("devices").at("device-head-red-01").at("bound_player_id").is_null(),
+           "app device unbind should clear bound player");
+
+    server.expect_clean_shutdown();
+    std::filesystem::remove_all(root);
+}
+
+void test_http_app_battle_operator_commands() {
+    const auto root = std::filesystem::temp_directory_path() / "fenghuo-server-app-battle-ops-test";
+    std::filesystem::remove_all(root);
+
+    RunningServer server(root);
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v0/rooms",
+               nlohmann::json{{"room_id", "room-app-battle-ops-001"},
+                              {"event_id", "room-app-battle-ops-evt-001"},
+                              {"source_id", "room-app-battle-ops-test"},
+                              {"sequence", 1},
+                              {"occurred_at_ms", 1730000120001},
+                              {"name", "App battle ops room"},
+                              {"mode", "team_deathmatch"},
+                              {"max_players", 2},
+                              {"teams",
+                               nlohmann::json::array({{{"team_id", "red"},
+                                                       {"display_name", "Red"},
+                                                       {"max_players", 1}},
+                                                      {{"team_id", "blue"},
+                                                       {"display_name", "Blue"},
+                                                       {"max_players", 1}}})}}
+                   .dump())
+               .result() == http::status::created,
+           "app battle ops room should be created");
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-battle-ops-001/join",
+               nlohmann::json{{"event_id", "room-app-battle-ops-evt-002"},
+                              {"source_id", "room-app-battle-ops-test"},
+                              {"sequence", 2},
+                              {"occurred_at_ms", 1730000120002},
+                              {"player_id", "p-red-01"},
+                              {"display_name", "Red 01"},
+                              {"team_id", "red"},
+                              {"module_id", "module-red-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "red player should join");
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-battle-ops-001/join",
+               nlohmann::json{{"event_id", "room-app-battle-ops-evt-003"},
+                              {"source_id", "room-app-battle-ops-test"},
+                              {"sequence", 3},
+                              {"occurred_at_ms", 1730000120003},
+                              {"player_id", "p-blue-01"},
+                              {"display_name", "Blue 01"},
+                              {"team_id", "blue"},
+                              {"module_id", "module-blue-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "blue player should join");
+
+    expect(http_request(
+               server.port(), http::verb::post,
+               "/api/v1/rooms/room-app-battle-ops-001/players/p-red-01/ready",
+               nlohmann::json{{"event_id", "room-app-battle-ops-evt-004"},
+                              {"source_id", "room-app-battle-ops-test"},
+                              {"sequence", 4},
+                              {"occurred_at_ms", 1730000120004},
+                              {"ready", true}}
+                   .dump())
+               .result() == http::status::ok,
+           "red player should become ready");
+    expect(http_request(
+               server.port(), http::verb::post,
+               "/api/v1/rooms/room-app-battle-ops-001/players/p-blue-01/ready",
+               nlohmann::json{{"event_id", "room-app-battle-ops-evt-005"},
+                              {"source_id", "room-app-battle-ops-test"},
+                              {"sequence", 5},
+                              {"occurred_at_ms", 1730000120005},
+                              {"ready", true}}
+                   .dump())
+               .result() == http::status::ok,
+           "blue player should become ready");
+
+    auto start_response = http_request(
+        server.port(), http::verb::post, "/api/v1/rooms/room-app-battle-ops-001/start",
+        nlohmann::json{{"event_id", "room-app-battle-ops-evt-006"},
+                       {"source_id", "room-app-battle-ops-test"},
+                       {"sequence", 6},
+                       {"occurred_at_ms", 1730000120006},
+                       {"battle_id", "battle-app-battle-ops-001"},
+                       {"duration_ms", 600000}}
+            .dump());
+    expect(start_response.result() == http::status::ok, "battle ops room should start");
+
+    auto pause_response = http_request(
+        server.port(), http::verb::post, "/api/v1/battles/battle-app-battle-ops-001/pause",
+        nlohmann::json{{"event_id", "room-app-battle-ops-evt-007"},
+                       {"source_id", "room-app-battle-ops-test"},
+                       {"sequence", 7},
+                       {"occurred_at_ms", 1730000120007},
+                       {"reason", "operator"}}
+            .dump());
+    expect(pause_response.result() == http::status::ok, "app battle pause should return 200");
+    auto pause_body = nlohmann::json::parse(pause_response.body());
+    expect(pause_body.at("phase") == "paused", "pause should return paused battle");
+
+    auto resume_response = http_request(
+        server.port(), http::verb::post, "/api/v1/battles/battle-app-battle-ops-001/resume",
+        nlohmann::json{{"event_id", "room-app-battle-ops-evt-008"},
+                       {"source_id", "room-app-battle-ops-test"},
+                       {"sequence", 8},
+                       {"occurred_at_ms", 1730000120008}}
+            .dump());
+    expect(resume_response.result() == http::status::ok, "app battle resume should return 200");
+    auto resume_body = nlohmann::json::parse(resume_response.body());
+    expect(resume_body.at("phase") == "active", "resume should return active battle");
+
+    auto end_response = http_request(
+        server.port(), http::verb::post, "/api/v1/battles/battle-app-battle-ops-001/end",
+        nlohmann::json{{"event_id", "room-app-battle-ops-evt-009"},
+                       {"source_id", "room-app-battle-ops-test"},
+                       {"sequence", 9},
+                       {"occurred_at_ms", 1730000120009},
+                       {"reason", "manual"}}
+            .dump());
+    expect(end_response.result() == http::status::ok, "app battle end should return 200");
+    auto end_body = nlohmann::json::parse(end_response.body());
+    expect(end_body.at("phase") == "ended", "end should return ended battle");
+
+    server.expect_clean_shutdown();
+    std::filesystem::remove_all(root);
+}
+
+void test_http_app_battle_shot_and_hit_commands() {
+    const auto root =
+        std::filesystem::temp_directory_path() / "fenghuo-server-app-battle-debug-test";
+    std::filesystem::remove_all(root);
+
+    RunningServer server(root);
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v0/rooms",
+               nlohmann::json{{"room_id", "room-app-battle-debug-001"},
+                              {"event_id", "room-app-battle-debug-evt-001"},
+                              {"source_id", "room-app-battle-debug-test"},
+                              {"sequence", 1},
+                              {"occurred_at_ms", 1730000140001},
+                              {"name", "App battle debug room"},
+                              {"mode", "team_deathmatch"},
+                              {"max_players", 2},
+                              {"teams",
+                               nlohmann::json::array({{{"team_id", "red"},
+                                                       {"display_name", "Red"},
+                                                       {"max_players", 1}},
+                                                      {{"team_id", "blue"},
+                                                       {"display_name", "Blue"},
+                                                       {"max_players", 1}}})}}
+                   .dump())
+               .result() == http::status::created,
+           "app battle debug room should be created");
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-battle-debug-001/join",
+               nlohmann::json{{"event_id", "room-app-battle-debug-evt-002"},
+                              {"source_id", "room-app-battle-debug-test"},
+                              {"sequence", 2},
+                              {"occurred_at_ms", 1730000140002},
+                              {"player_id", "p-red-01"},
+                              {"display_name", "Red 01"},
+                              {"team_id", "red"},
+                              {"module_id", "module-red-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "battle debug red player should join");
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-battle-debug-001/join",
+               nlohmann::json{{"event_id", "room-app-battle-debug-evt-003"},
+                              {"source_id", "room-app-battle-debug-test"},
+                              {"sequence", 3},
+                              {"occurred_at_ms", 1730000140003},
+                              {"player_id", "p-blue-01"},
+                              {"display_name", "Blue 01"},
+                              {"team_id", "blue"},
+                              {"module_id", "module-blue-01"}}
+                   .dump())
+               .result() == http::status::ok,
+           "battle debug blue player should join");
+
+    expect(http_request(
+               server.port(), http::verb::post,
+               "/api/v1/rooms/room-app-battle-debug-001/players/p-red-01/ready",
+               nlohmann::json{{"event_id", "room-app-battle-debug-evt-004"},
+                              {"source_id", "room-app-battle-debug-test"},
+                              {"sequence", 4},
+                              {"occurred_at_ms", 1730000140004},
+                              {"ready", true}}
+                   .dump())
+               .result() == http::status::ok,
+           "battle debug red ready should succeed");
+    expect(http_request(
+               server.port(), http::verb::post,
+               "/api/v1/rooms/room-app-battle-debug-001/players/p-blue-01/ready",
+               nlohmann::json{{"event_id", "room-app-battle-debug-evt-005"},
+                              {"source_id", "room-app-battle-debug-test"},
+                              {"sequence", 5},
+                              {"occurred_at_ms", 1730000140005},
+                              {"ready", true}}
+                   .dump())
+               .result() == http::status::ok,
+           "battle debug blue ready should succeed");
+
+    expect(http_request(
+               server.port(), http::verb::post, "/api/v1/rooms/room-app-battle-debug-001/start",
+               nlohmann::json{{"event_id", "room-app-battle-debug-evt-006"},
+                              {"source_id", "room-app-battle-debug-test"},
+                              {"sequence", 6},
+                              {"occurred_at_ms", 1730000140006},
+                              {"battle_id", "battle-app-debug-001"},
+                              {"duration_ms", 600000}}
+                   .dump())
+               .result() == http::status::ok,
+           "battle debug room should start");
+
+    auto shot_response = http_request(
+        server.port(), http::verb::post, "/api/v1/battles/battle-app-debug-001/shot",
+        nlohmann::json{{"event_id", "room-app-battle-debug-evt-007"},
+                       {"source_id", "room-app-battle-debug-test"},
+                       {"sequence", 7},
+                       {"occurred_at_ms", 1730000140007},
+                       {"player_id", "p-red-01"},
+                       {"weapon_id", "rifle-01"},
+                       {"ammo_after", 29}}
+            .dump());
+    expect(shot_response.result() == http::status::ok, "app battle shot should return 200");
+    auto shot_body = nlohmann::json::parse(shot_response.body());
+    expect(shot_body.at("players").at("p-red-01").at("shot_count") == 1,
+           "app battle shot should increase shot count");
+
+    auto hit_response = http_request(
+        server.port(), http::verb::post, "/api/v1/battles/battle-app-debug-001/hit",
+        nlohmann::json{{"event_id", "room-app-battle-debug-evt-008"},
+                       {"source_id", "room-app-battle-debug-test"},
+                       {"sequence", 8},
+                       {"occurred_at_ms", 1730000140008},
+                       {"attacker_player_id", "p-red-01"},
+                       {"target_player_id", "p-blue-01"},
+                       {"weapon_id", "rifle-01"},
+                       {"damage", 10},
+                       {"hit_zone", "torso"}}
+            .dump());
+    expect(hit_response.result() == http::status::ok, "app battle hit should return 200");
+    auto hit_body = nlohmann::json::parse(hit_response.body());
+    expect(hit_body.at("players").at("p-red-01").at("hit_count") == 1,
+           "app battle hit should increase hit count");
+    expect(hit_body.at("players").at("p-blue-01").at("health") == 90,
+           "app battle hit should reduce target health");
+
+    server.expect_clean_shutdown();
+    std::filesystem::remove_all(root);
+}
+
 void test_console_assets() {
     const auto root = std::filesystem::temp_directory_path() / "fenghuo-console-integration-test";
     std::filesystem::remove_all(root);
@@ -1098,6 +1736,21 @@ void test_console_assets() {
     expect(sim_js_response.result() == http::status::ok, "GET sim JS should return 200");
     expect(sim_js_response.body().find("setupRoom") != std::string::npos,
            "sim JS should include setup code");
+
+    auto app_response = http_request(server.port(), http::verb::get, "/app");
+    expect(app_response.result() == http::status::ok, "GET /app should return 200");
+    expect(app_response.body().find("Fenghuo App Debug") != std::string::npos,
+           "app HTML should include title");
+
+    auto app_css_response = http_request(server.port(), http::verb::get, "/app/styles.css");
+    expect(app_css_response.result() == http::status::ok, "GET /app/styles.css should return 200");
+    expect(app_css_response.body().find(".statusList") != std::string::npos,
+           "app CSS should include status list styles");
+
+    auto app_js_response = http_request(server.port(), http::verb::get, "/app/app.js");
+    expect(app_js_response.result() == http::status::ok, "GET /app/app.js should return 200");
+    expect(app_js_response.body().find("/api/v1/rooms") != std::string::npos,
+           "app JS should consume api v1 rooms");
 
     server.expect_clean_shutdown();
     std::filesystem::remove_all(root);
@@ -1179,29 +1832,23 @@ void test_websocket_disconnect_does_not_kill_server() {
 } // namespace
 
 int main() {
-    std::cerr << "test_http_post_snapshot_and_websocket_live\n";
     test_http_post_snapshot_and_websocket_live();
-    std::cerr << "test_http_room_endpoints\n";
     test_http_room_endpoints();
-    std::cerr << "test_http_room_device_endpoints\n";
     test_http_room_device_endpoints();
-    std::cerr << "test_http_room_map_endpoints\n";
     test_http_room_map_endpoints();
-    std::cerr << "test_websocket_map_updated_message\n";
     test_websocket_map_updated_message();
-    std::cerr << "test_websocket_app_aggregate_messages\n";
     test_websocket_app_aggregate_messages();
-    std::cerr << "test_websocket_player_status_updated_from_battle\n";
     test_websocket_player_status_updated_from_battle();
-    std::cerr << "test_http_app_aggregate_queries\n";
     test_http_app_aggregate_queries();
-    std::cerr << "test_http_app_join_and_leave_commands\n";
     test_http_app_join_and_leave_commands();
-    std::cerr << "test_console_assets\n";
+    test_http_app_create_room_command();
+    test_http_app_position_command();
+    test_http_app_ready_start_and_close_commands();
+    test_http_app_device_commands();
+    test_http_app_battle_operator_commands();
+    test_http_app_battle_shot_and_hit_commands();
     test_console_assets();
-    std::cerr << "test_http_hit_damage_rounds_fractional_number\n";
     test_http_hit_damage_rounds_fractional_number();
-    std::cerr << "test_websocket_disconnect_does_not_kill_server\n";
     test_websocket_disconnect_does_not_kill_server();
     return 0;
 }

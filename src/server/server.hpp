@@ -67,6 +67,7 @@ private:
     HttpResponse handle_request(const HttpRequest& request);
     HttpResponse handle_room_request(const HttpRequest& request, std::string target);
     HttpResponse handle_app_query_request(const HttpRequest& request, std::string target);
+    HttpResponse handle_app_page_request(const HttpRequest& request, std::string target);
     HttpResponse handle_console_request(const HttpRequest& request, std::string target);
     HttpResponse handle_sim_request(const HttpRequest& request, std::string target);
     HttpResponse json_response(boost::beast::http::status status, nlohmann::json body,
