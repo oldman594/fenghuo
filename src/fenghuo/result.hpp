@@ -35,6 +35,7 @@ public:
 
 template <typename T>
 class Result {
+    //这两个断言的作用 对模板类型进行约束 不能为void类型 也不能为引用类型
     static_assert(!std::is_void_v<T>, "Use Result<void> for void results");
     static_assert(!std::is_reference_v<T>, "Result<T> does not support reference value types");
 

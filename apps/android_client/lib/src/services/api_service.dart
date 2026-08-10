@@ -61,6 +61,54 @@ class ApiService {
     return BattleSnapshot.fromJson(json);
   }
 
+  Future<RoomDetail> joinRoom({
+    required String roomId,
+    required String playerId,
+    required String displayName,
+    required String teamId,
+  }) async {
+    final json = await _postJson('/api/v1/rooms/$roomId/join', {
+      'event_id': 'app-room-join-${DateTime.now().millisecondsSinceEpoch}',
+      'source_id': 'android-client',
+      'sequence': DateTime.now().millisecondsSinceEpoch,
+      'occurred_at_ms': DateTime.now().millisecondsSinceEpoch,
+      'player_id': playerId,
+      'display_name': displayName,
+      'team_id': teamId,
+      'module_id': 'module-$playerId',
+    });
+    return RoomDetail.fromJson(json);
+  }
+
+  Future<RoomDetail> leaveRoom({
+    required String roomId,
+    required String playerId,
+  }) async {
+    final json = await _postJson('/api/v1/rooms/$roomId/leave', {
+      'event_id': 'app-room-leave-${DateTime.now().millisecondsSinceEpoch}',
+      'source_id': 'android-client',
+      'sequence': DateTime.now().millisecondsSinceEpoch,
+      'occurred_at_ms': DateTime.now().millisecondsSinceEpoch,
+      'player_id': playerId,
+    });
+    return RoomDetail.fromJson(json);
+  }
+
+  Future<RoomDetail> setPlayerReady({
+    required String roomId,
+    required String playerId,
+    required bool ready,
+  }) async {
+    final json = await _postJson('/api/v1/rooms/$roomId/players/$playerId/ready', {
+      'event_id': 'app-room-ready-${DateTime.now().millisecondsSinceEpoch}',
+      'source_id': 'android-client',
+      'sequence': DateTime.now().millisecondsSinceEpoch,
+      'occurred_at_ms': DateTime.now().millisecondsSinceEpoch,
+      'ready': ready,
+    });
+    return RoomDetail.fromJson(json);
+  }
+
   Future<RoomDetail> createRoom({
     required String roomId,
     required String name,

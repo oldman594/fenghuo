@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'pages/battle_page.dart';
-import 'pages/map_page.dart';
-import 'pages/rooms_page.dart';
-import 'pages/settings_page.dart';
+import 'pages/home_page.dart';
+import 'pages/me_page.dart';
+import 'pages/room_page.dart';
 import 'state/app_state.dart';
 
 class FenghuoApp extends StatelessWidget {
@@ -13,11 +13,25 @@ class FenghuoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const seed = Color(0xFFE0564A);
     return MaterialApp(
       title: 'Fenghuo App V1',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: seed,
+          brightness: Brightness.dark,
+        ),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFF0E1217),
+        cardTheme: const CardThemeData(
+          color: Color(0xFF171C23),
+          margin: EdgeInsets.zero,
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0E1217),
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
       ),
       home: const AppShell(),
     );
@@ -51,10 +65,10 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final tabs = [
-      RoomsPage(state: _state),
+      HomePage(state: _state),
+      RoomPage(state: _state),
       BattlePage(state: _state),
-      MapPage(state: _state),
-      SettingsPage(state: _state),
+      MePage(state: _state),
     ];
 
     return AnimatedBuilder(
@@ -67,6 +81,7 @@ class _AppShellState extends State<AppShell> {
               IconButton(
                 onPressed: _state.refreshSelected,
                 icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh',
               ),
             ],
           ),
@@ -89,10 +104,10 @@ class _AppShellState extends State<AppShell> {
             selectedIndex: _index,
             onDestinationSelected: (value) => setState(() => _index = value),
             destinations: const [
-              NavigationDestination(icon: Icon(Icons.meeting_room), label: 'Rooms'),
-              NavigationDestination(icon: Icon(Icons.shield), label: 'Battle'),
-              NavigationDestination(icon: Icon(Icons.map), label: 'Map'),
-              NavigationDestination(icon: Icon(Icons.settings), label: 'Settings'),
+              NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+              NavigationDestination(icon: Icon(Icons.groups_outlined), label: 'Room'),
+              NavigationDestination(icon: Icon(Icons.map_outlined), label: 'Battle'),
+              NavigationDestination(icon: Icon(Icons.person_outline), label: 'Me'),
             ],
           ),
         );
